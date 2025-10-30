@@ -21,7 +21,7 @@ The app will read/write IndexedDB offline and sync to Supabase when online.
 
 ## Project info
 
-**URL**: https://lovable.dev/projects/5bd6baaa-095a-4cde-80fe-4be5c6cbb84a
+**URL**: https://rmp-web.vercel.app
 
 ## How can I edit this code?
 
