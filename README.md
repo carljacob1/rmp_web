@@ -29,7 +29,7 @@ There are several ways of editing your application.
 
 **Use Lovable**
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/5bd6baaa-095a-4cde-80fe-4be5c6cbb84a) and start prompting.
+Simply visit the [Lovable Project](https://rmp-web.vercel.app) and start prompting.
 
 Changes made via Lovable will be committed automatically to this repo.
 
