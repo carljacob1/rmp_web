@@ -86,22 +86,28 @@ export function AccountingDashboard() {
     })();
   }, []);
 
-  // Calculate totals
+  // Calculate totals - handle undefined/null values safely
   const totalRevenue = invoices
-    .filter(inv => inv.status === 'paid')
-    .reduce((sum, inv) => sum + inv.total, 0);
+    .filter(inv => inv && inv.status === 'paid' && inv.total)
+    .reduce((sum, inv) => sum + (inv.total || 0), 0);
   
-  const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
+  const totalExpenses = expenses
+    .filter(exp => exp && exp.amount)
+    .reduce((sum, exp) => sum + (exp.amount || 0), 0);
   const netProfit = totalRevenue - totalExpenses;
   
   const pendingInvoices = invoices
-    .filter(inv => inv.status === 'sent' || inv.status === 'overdue')
-    .reduce((sum, inv) => sum + inv.total, 0);
+    .filter(inv => inv && (inv.status === 'sent' || inv.status === 'overdue') && inv.total)
+    .reduce((sum, inv) => sum + (inv.total || 0), 0);
 
-  const filteredInvoices = invoices.filter(invoice =>
-    invoice.clientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    invoice.invoiceNumber.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredInvoices = invoices.filter(invoice => {
+    // Handle case variations and undefined values safely
+    const clientName = (invoice.clientName || invoice.clientname || '').toLowerCase();
+    const invoiceNumber = (invoice.invoiceNumber || invoice.invoicenumber || '').toLowerCase();
+    const searchLower = searchTerm.toLowerCase();
+    
+    return clientName.includes(searchLower) || invoiceNumber.includes(searchLower);
+  });
 
   const handleExportData = () => {
     const data = { invoices, expenses };
@@ -352,18 +358,18 @@ function InvoicesTab({
               >
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="font-medium">{invoice.invoiceNumber}</span>
-                    <Badge className={getStatusColor(invoice.status)}>
-                      {invoice.status}
+                    <span className="font-medium">{invoice.invoiceNumber || invoice.invoicenumber || 'N/A'}</span>
+                    <Badge className={getStatusColor(invoice.status || 'draft')}>
+                      {invoice.status || 'draft'}
                     </Badge>
                   </div>
                   <div className="text-sm text-muted-foreground">
-                    {invoice.clientName} • Due: {invoice.dueDate}
+                    {invoice.clientName || invoice.clientname || 'N/A'} • Due: {invoice.dueDate || 'N/A'}
                   </div>
                 </div>
                 <div className="text-right">
-                  <div className="font-semibold">₹{invoice.total.toFixed(2)}</div>
-                  <div className="text-sm text-muted-foreground">{invoice.issueDate}</div>
+                  <div className="font-semibold">₹{(invoice.total || 0).toFixed(2)}</div>
+                  <div className="text-sm text-muted-foreground">{invoice.issueDate || invoice.issuedate || 'N/A'}</div>
                 </div>
               </div>
             ))}
@@ -742,18 +748,21 @@ function InvoiceDetails({ invoice, onBack, onUpdate }: {
   };
 
   const downloadInvoicePDF = () => {
-    // Generate UPI payment string
-    const upiPaymentString = invoice.upiId 
-      ? `upi://pay?pa=${encodeURIComponent(invoice.upiId)}&am=${invoice.total}&cu=INR&tn=${encodeURIComponent(`Payment for ${invoice.invoiceNumber}`)}`
+    // Generate UPI payment string - handle all field name variations
+    const invoiceNum = invoice.invoiceNumber || invoice.invoicenumber || 'N/A';
+    const invoiceTotal = invoice.total || 0;
+    const upiId = invoice.upiId || invoice.upiid || '';
+    const upiPaymentString = upiId 
+      ? `upi://pay?pa=${encodeURIComponent(upiId)}&am=${invoiceTotal}&cu=INR&tn=${encodeURIComponent(`Payment for ${invoiceNum}`)}`
       : '';
 
-    // Create HTML content for PDF
+    // Create HTML content for PDF - handle all field name variations
     const htmlContent = `
       <!DOCTYPE html>
       <html>
         <head>
           <meta charset="UTF-8">
-          <title>Invoice ${invoice.invoiceNumber}</title>
+          <title>Invoice ${invoiceNum}</title>
           <style>
             body { font-family: Arial, sans-serif; padding: 40px; }
             .header { margin-bottom: 30px; }
@@ -772,17 +781,17 @@ function InvoiceDetails({ invoice, onBack, onUpdate }: {
         </head>
         <body>
           <div class="header">
-            <div class="invoice-title">INVOICE ${invoice.invoiceNumber}</div>
-            <div>Issue Date: ${invoice.issueDate}</div>
-            <div>Due Date: ${invoice.dueDate}</div>
+            <div class="invoice-title">INVOICE ${invoiceNum}</div>
+            <div>Issue Date: ${invoice.issueDate || invoice.issuedate || 'N/A'}</div>
+            <div>Due Date: ${invoice.dueDate || invoice.duedate || 'N/A'}</div>
           </div>
           
           <div class="billing-info">
             <div class="section">
               <h3>Bill To:</h3>
-              <p><strong>${invoice.clientName}</strong></p>
-              <p>${invoice.clientEmail || ''}</p>
-              <p>${invoice.clientAddress || ''}</p>
+              <p><strong>${invoice.clientName || invoice.clientname || 'N/A'}</strong></p>
+              <p>${invoice.clientEmail || invoice.clientemail || ''}</p>
+              <p>${invoice.clientAddress || invoice.clientaddress || ''}</p>
             </div>
           </div>
 
@@ -798,28 +807,28 @@ function InvoiceDetails({ invoice, onBack, onUpdate }: {
               </tr>
             </thead>
             <tbody>
-              ${invoice.items.map(item => `
+              ${(invoice.items || []).map((item: any) => `
                 <tr>
-                  <td>${item.description}</td>
-                  <td>${item.quantity}</td>
-                  <td>₹${item.rate.toFixed(2)}</td>
-                  <td>₹${item.amount.toFixed(2)}</td>
+                  <td>${item.description || 'N/A'}</td>
+                  <td>${item.quantity || 0}</td>
+                  <td>₹${(item.rate || 0).toFixed(2)}</td>
+                  <td>₹${(item.amount || 0).toFixed(2)}</td>
                 </tr>
               `).join('')}
             </tbody>
           </table>
 
           <div class="total-section">
-            <div class="total-row">Subtotal: ₹${invoice.subtotal.toFixed(2)}</div>
-            <div class="total-row">Tax (${invoice.taxRate}%): ₹${invoice.tax.toFixed(2)}</div>
-            <div class="total-row total-final">Total: ₹${invoice.total.toFixed(2)}</div>
+            <div class="total-row">Subtotal: ₹${(invoice.subtotal || 0).toFixed(2)}</div>
+            <div class="total-row">Tax (${invoice.taxRate || invoice.taxrate || 18}%): ₹${(invoice.tax || 0).toFixed(2)}</div>
+            <div class="total-row total-final">Total: ₹${(invoice.total || 0).toFixed(2)}</div>
           </div>
 
-          ${invoice.upiId ? `
+          ${upiId ? `
             <div class="qr-code">
               <h3>Scan to Pay via UPI</h3>
               <div id="qrcode-container"></div>
-              <p>UPI ID: ${invoice.upiId}</p>
+              <p>UPI ID: ${upiId}</p>
             </div>
           ` : ''}
 
@@ -858,14 +867,14 @@ function InvoiceDetails({ invoice, onBack, onUpdate }: {
             <Button variant="ghost" onClick={onBack} className="mb-2">
               ← Back to Invoices
             </Button>
-            <CardTitle className="text-2xl">{invoice.invoiceNumber}</CardTitle>
+            <CardTitle className="text-2xl">{invoice.invoiceNumber || invoice.invoicenumber || 'N/A'}</CardTitle>
             <div className="flex items-center gap-2 mt-2">
               <Badge className={
-                invoice.status === 'paid' ? 'bg-green-500' :
-                invoice.status === 'overdue' ? 'bg-red-500' :
-                invoice.status === 'sent' ? 'bg-blue-500' : 'bg-gray-500'
+                (invoice.status || 'draft') === 'paid' ? 'bg-green-500' :
+                (invoice.status || 'draft') === 'overdue' ? 'bg-red-500' :
+                (invoice.status || 'draft') === 'sent' ? 'bg-blue-500' : 'bg-gray-500'
               }>
-                {invoice.status}
+                {invoice.status || 'draft'}
               </Badge>
             </div>
           </div>
@@ -874,12 +883,12 @@ function InvoiceDetails({ invoice, onBack, onUpdate }: {
               <Download className="h-4 w-4 mr-2" />
               Download PDF
             </Button>
-            {invoice.status === 'draft' && (
+            {(invoice.status || 'draft') === 'draft' && (
               <Button onClick={() => updateStatus('sent')}>
                 Mark as Sent
               </Button>
             )}
-            {invoice.status === 'sent' && (
+            {(invoice.status || 'draft') === 'sent' && (
               <Button onClick={() => updateStatus('paid')}>
                 Mark as Paid
               </Button>
@@ -892,20 +901,20 @@ function InvoiceDetails({ invoice, onBack, onUpdate }: {
           <div>
             <h3 className="font-semibold mb-2">Bill To:</h3>
             <div className="space-y-1">
-              <p className="font-medium">{invoice.clientName}</p>
-              <p className="text-muted-foreground">{invoice.clientEmail}</p>
-              <p className="text-muted-foreground whitespace-pre-line">{invoice.clientAddress}</p>
+              <p className="font-medium">{invoice.clientName || invoice.clientname || 'N/A'}</p>
+              <p className="text-muted-foreground">{invoice.clientEmail || invoice.clientemail || 'N/A'}</p>
+              <p className="text-muted-foreground whitespace-pre-line">{invoice.clientAddress || invoice.clientaddress || 'N/A'}</p>
             </div>
           </div>
           <div>
             <div className="space-y-2">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Issue Date:</span>
-                <span>{invoice.issueDate}</span>
+                <span>{invoice.issueDate || invoice.issuedate || 'N/A'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Due Date:</span>
-                <span>{invoice.dueDate}</span>
+                <span>{invoice.dueDate || invoice.duedate || 'N/A'}</span>
               </div>
             </div>
           </div>
@@ -920,12 +929,12 @@ function InvoiceDetails({ invoice, onBack, onUpdate }: {
               <div className="col-span-2">Rate</div>
               <div className="col-span-3 text-right">Amount</div>
             </div>
-            {invoice.items.map((item) => (
+            {(invoice.items || []).map((item: any) => (
               <div key={item.id} className="grid grid-cols-12 gap-4 p-4 border-t">
-                <div className="col-span-5">{item.description}</div>
-                <div className="col-span-2">{item.quantity}</div>
-                <div className="col-span-2">₹{item.rate.toFixed(2)}</div>
-                <div className="col-span-3 text-right">₹{item.amount.toFixed(2)}</div>
+                <div className="col-span-5">{item.description || 'N/A'}</div>
+                <div className="col-span-2">{item.quantity || 0}</div>
+                <div className="col-span-2">₹{(item.rate || 0).toFixed(2)}</div>
+                <div className="col-span-3 text-right">₹{(item.amount || 0).toFixed(2)}</div>
               </div>
             ))}
           </div>
@@ -935,15 +944,15 @@ function InvoiceDetails({ invoice, onBack, onUpdate }: {
           <div className="w-64 space-y-2">
             <div className="flex justify-between">
               <span>Subtotal:</span>
-              <span>₹{invoice.subtotal.toFixed(2)}</span>
+              <span>₹{(invoice.subtotal || 0).toFixed(2)}</span>
             </div>
               <div className="flex justify-between">
-                <span>Tax ({invoice.taxRate || 18}%):</span>
-                <span>₹{invoice.tax.toFixed(2)}</span>
+                <span>Tax ({invoice.taxRate || invoice.taxrate || 18}%):</span>
+                <span>₹{(invoice.tax || 0).toFixed(2)}</span>
               </div>
             <div className="flex justify-between font-bold text-lg border-t pt-2">
               <span>Total:</span>
-              <span>₹{invoice.total.toFixed(2)}</span>
+              <span>₹{(invoice.total || 0).toFixed(2)}</span>
             </div>
           </div>
         </div>
@@ -955,20 +964,20 @@ function InvoiceDetails({ invoice, onBack, onUpdate }: {
           </div>
         )}
 
-        {invoice.upiId && (
+        {(invoice.upiId || invoice.upiid) && (
           <div className="border-t pt-4">
             <h3 className="font-semibold mb-4 text-center">Pay via UPI</h3>
             <div className="flex flex-col items-center gap-4">
               <div className="bg-white p-4 rounded-lg border">
                 <QRCodeSVG 
-                  value={`upi://pay?pa=${encodeURIComponent(invoice.upiId)}&am=${invoice.total}&cu=INR&tn=${encodeURIComponent(`Payment for ${invoice.invoiceNumber}`)}`}
+                  value={`upi://pay?pa=${encodeURIComponent(invoice.upiId || invoice.upiid || '')}&am=${invoice.total || 0}&cu=INR&tn=${encodeURIComponent(`Payment for ${invoice.invoiceNumber || invoice.invoicenumber || 'N/A'}`)}`}
                   size={200}
                 />
               </div>
               <div className="text-center">
                 <p className="text-sm font-medium">Scan to Pay</p>
-                <p className="text-xs text-muted-foreground mt-1">UPI ID: {invoice.upiId}</p>
-                <p className="text-xs text-muted-foreground">Amount: ₹{invoice.total.toFixed(2)}</p>
+                <p className="text-xs text-muted-foreground mt-1">UPI ID: {invoice.upiId || invoice.upiid || 'N/A'}</p>
+                <p className="text-xs text-muted-foreground">Amount: ₹{(invoice.total || 0).toFixed(2)}</p>
               </div>
             </div>
           </div>

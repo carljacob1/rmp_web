@@ -13,13 +13,50 @@ interface RestaurantReportsProps {
 type OrderRecord = any;
 type ProductRecord = any;
 
+// Helper function to get date range from string
+function getDateRange(range: DateRange): { start: Date; end: Date } {
+  const now = new Date();
+  const start = new Date();
+
+  switch (range) {
+    case 'today':
+      start.setHours(0, 0, 0, 0);
+      break;
+    case 'week':
+      start.setDate(now.getDate() - 7);
+      start.setHours(0, 0, 0, 0);
+      break;
+    case 'month':
+      start.setMonth(now.getMonth() - 1);
+      start.setHours(0, 0, 0, 0);
+      break;
+    case 'quarter':
+      start.setMonth(now.getMonth() - 3);
+      start.setHours(0, 0, 0, 0);
+      break;
+    case 'year':
+      start.setFullYear(now.getFullYear() - 1);
+      start.setHours(0, 0, 0, 0);
+      break;
+    default:
+      start.setMonth(now.getMonth() - 1);
+      start.setHours(0, 0, 0, 0);
+  }
+
+  const end = new Date(now);
+  end.setHours(23, 59, 59, 999);
+
+  return { start, end };
+}
+
 function inRange(ts: string | undefined, range: DateRange): boolean {
   if (!ts) return true;
   const d = new Date(ts).getTime();
-  const from = range.from?.getTime();
-  const to = range.to?.getTime();
-  if (from && d < from) return false;
-  if (to && d > to) return false;
+  const { start, end } = getDateRange(range);
+  const from = start.getTime();
+  const to = end.getTime();
+  if (d < from) return false;
+  if (d > to) return false;
   return true;
 }
 

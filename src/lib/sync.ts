@@ -57,13 +57,13 @@ function mapKeysForSupabase<T extends AnyRecord>(obj: T): AnyRecord {
 
 // Whitelist minimal, safe columns to avoid PostgREST 406 when some columns don't exist yet
 const SAFE_COLUMNS: Record<string, string[]> = {
-  users: ['id','businessid','ownername','email','mobile','createdat'],
-  registrations: ['id','ownername','email','mobile','password','businesstype','plan','createdat'],
-  settings: ['id','data','created_at','createdat'],
-  categories: ['id','name','description','sortorder','created_at','createdat'],
-  products: ['id','name','description','price','category','image','available','modifiers','variations','tags','expirydate','created_at','createdat'],
-  orders: ['id','customername','customerphone','items','total','ordertime','status','ordertype','tablenumber','address','created_at','createdat'],
-  medicines: ['id','name','brand','category','batchnumber','expirydate','manufacturingdate','quantity','unitprice','supplier','prescription','activeingredient','dosage','form','lowstockthreshold','created_at','createdat'],
+  users: ['id','businessid','ownername','email','mobile','createdat','updated_at'],
+  registrations: ['id','ownername','email','mobile','password','businesstype','plan','createdat','updated_at'],
+  settings: ['id','data','created_at','createdat','updated_at'],
+  categories: ['id','name','description','sortorder','created_at','createdat','updated_at'],
+  products: ['id','name','description','price','category','image','available','modifiers','variations','tags','expirydate','stock','lowstockthreshold','created_at','createdat','updated_at'],
+  orders: ['id','businesstype','customername','customerphone','customeremail','items','subtotal','tax','total','taxrate','paymentmethod','upivid','paymentstatus','timestamp','status','ordertype','tablenumber','address','created_at','createdat','updated_at'],
+  medicines: ['id','name','brand','category','batchnumber','expirydate','manufacturingdate','quantity','unitprice','supplier','prescription','activeingredient','dosage','form','lowstockthreshold','created_at','createdat','updated_at'],
   invoices: ['id','invoicenumber','clientname','clientemail','clientaddress','items','subtotal','tax','total','status','issuedate','duedate','notes','createdat','updated_at'],
   expenses: ['id','description','amount','category','date','receipt','notes','createdat','updated_at']
 };
@@ -72,8 +72,21 @@ function filterColumnsForTable(table: string, obj: AnyRecord): AnyRecord {
   const allow = SAFE_COLUMNS[table];
   if (!allow) return obj; // unknown table: pass-through
   const out: AnyRecord = {};
-  for (const k of allow) {
-    if (obj[k] !== undefined) out[k] = obj[k];
+  
+  // Create case-insensitive lookup map for input keys
+  const inputKeyMap = new Map<string, string>();
+  for (const key of Object.keys(obj)) {
+    inputKeyMap.set(key.toLowerCase(), key); // Map lowercase -> original key in input
+  }
+  
+  // Only use columns from SAFE_COLUMNS (which are all lowercase to match database)
+  // Match input keys case-insensitively and use the exact database column name from SAFE_COLUMNS
+  for (const dbColumnName of allow) {
+    const inputKey = inputKeyMap.get(dbColumnName.toLowerCase());
+    if (inputKey !== undefined) {
+      // Use the exact lowercase column name from SAFE_COLUMNS (matches database)
+      out[dbColumnName] = obj[inputKey];
+    }
   }
   return out;
 }
