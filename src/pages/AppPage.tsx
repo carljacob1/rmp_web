@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { BusinessSelector, BusinessType } from "@/components/BusinessSelector";
-import { BusinessPOSDemo } from "@/components/demo/BusinessPOSDemo";
 import { InventoryDashboard } from "@/components/retail/InventoryDashboard";
 import { AppointmentDashboard } from "@/components/service/AppointmentDashboard";
 import { OrderDashboard } from "@/components/restaurant/OrderDashboard";
@@ -9,58 +8,92 @@ import { EPRDashboard } from "@/components/healthcare/EPRDashboard";
 import { RefillingDashboard } from "@/components/refilling/RefillingDashboard";
 import { ReportsManager } from "@/components/reports/ReportsManager";
 import { AccountingDashboard } from "@/components/accounting/AccountingDashboard";
-import { AdminLogin } from "@/components/admin/AdminLogin";
-import { AdminDashboard } from "@/components/admin/AdminDashboard";
 import { Button } from "@/components/ui/button";
-import { BarChart3, Home, Calculator, Shield, LogOut, Store, Calendar, UtensilsCrossed, Heart, Fuel } from "lucide-react";
+import { BarChart3, Calculator, LogOut, Store, Calendar, UtensilsCrossed, Heart, Fuel, UserCheck, Settings } from "lucide-react";
+import { Settings as SettingsComponent } from "@/components/settings/Settings";
+import { getCurrentUser } from "@/lib/indexeddb";
 
 const AppPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
   
-  // Load user from localStorage or location state
-  const [currentUser, setCurrentUser] = useState<any>(() => {
-    const saved = localStorage.getItem("currentUser");
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        return null;
-      }
-    }
-    return location.state?.user || null;
-  });
-
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  
   // Load saved business type from localStorage or location state
   const [selectedBusiness, setSelectedBusiness] = useState<BusinessType>(() => {
-    if (currentUser?.businessType) {
-      return currentUser.businessType as BusinessType;
-    }
     const saved = localStorage.getItem("selectedBusinessType");
     return (saved as BusinessType) || "retail";
   });
   
-  const [userBusinessType, setUserBusinessType] = useState<BusinessType | null>(
-    currentUser?.businessType || null
-  );
+  const [userBusinessType, setUserBusinessType] = useState<BusinessType | null>(null);
   const [hasMultipleLocations, setHasMultipleLocations] = useState(false);
   
-  // Load saved view from localStorage, default to "demo" for new users
-  const [currentView, setCurrentView] = useState<"demo" | "dashboard" | "reports" | "accounting">(() => {
+  // Load saved view from localStorage, default to "dashboard"
+  const [currentView, setCurrentView] = useState<"dashboard" | "reports" | "accounting" | "settings">(() => {
     const saved = localStorage.getItem("currentView");
-    return (saved as "demo" | "dashboard" | "reports" | "accounting") || "dashboard";
+    return (saved as "dashboard" | "reports" | "accounting" | "settings") || "dashboard";
   });
-  
-  const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(false);
-  const [showAdminLogin, setShowAdminLogin] = useState(false);
-  const [isLoggedIn, setIsLoggedIn] = useState(!!currentUser);
 
-  // Redirect if not logged in
+  // Load user from localStorage, IndexedDB, or location state
   useEffect(() => {
-    if (!isLoggedIn || !currentUser) {
+    const loadUser = async () => {
+      setIsLoading(true);
+      try {
+        // First check location state (from navigation)
+        if (location.state?.user) {
+          setCurrentUser(location.state.user);
+          setUserBusinessType(location.state.user.businessType);
+          setIsLoading(false);
+          return;
+        }
+
+        // Then check localStorage
+        const saved = localStorage.getItem("currentUser");
+        if (saved) {
+          try {
+            const user = JSON.parse(saved);
+            setCurrentUser(user);
+            setUserBusinessType(user.businessType);
+            setIsLoading(false);
+            return;
+          } catch (e) {
+            console.error('Error parsing localStorage user:', e);
+          }
+        }
+
+        // Finally check IndexedDB
+        const indexedUser = await getCurrentUser();
+        if (indexedUser) {
+          setCurrentUser(indexedUser);
+          setUserBusinessType(indexedUser.businessType);
+          // Also save to localStorage for compatibility
+          localStorage.setItem("currentUser", JSON.stringify(indexedUser));
+        }
+      } catch (error) {
+        console.error('Error loading user:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadUser();
+  }, [location.state]);
+
+  // Redirect if not logged in (after loading)
+  useEffect(() => {
+    if (!isLoading && !currentUser) {
       navigate("/login");
     }
-  }, [isLoggedIn, currentUser, navigate]);
+  }, [isLoading, currentUser, navigate]);
+
+  // Update business type when user loads
+  useEffect(() => {
+    if (currentUser?.businessType) {
+      setSelectedBusiness(currentUser.businessType);
+      setUserBusinessType(currentUser.businessType);
+    }
+  }, [currentUser]);
 
   // Save business type selection to localStorage whenever it changes
   useEffect(() => {
@@ -89,20 +122,15 @@ const AppPage = () => {
     }
   };
 
-  const handleStartDemo = (businessType: string) => {
-    setSelectedBusiness(businessType as BusinessType);
-    setCurrentView("dashboard");
-  };
-
   const renderContent = () => {
-    if (currentView === "demo") {
-      return <BusinessPOSDemo onStartDemo={handleStartDemo} />;
-    }
     if (currentView === "reports") {
       return <ReportsManager businessType={selectedBusiness} />;
     }
     if (currentView === "accounting") {
       return <AccountingDashboard />;
+    }
+    if (currentView === "settings") {
+      return <SettingsComponent onBack={() => setCurrentView("dashboard")} businessType={selectedBusiness} />;
     }
     return renderDashboard();
   };
@@ -114,30 +142,20 @@ const AppPage = () => {
     navigate("/");
   };
 
-  // Handle admin login/logout
-  if (showAdminLogin && !isAdminLoggedIn) {
+  // Show loading state
+  if (isLoading) {
     return (
-      <AdminLogin 
-        onLogin={() => {
-          setIsAdminLoggedIn(true);
-          setShowAdminLogin(false);
-        }} 
-      />
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-muted-foreground">Loading...</p>
+        </div>
+      </div>
     );
   }
 
-  if (isAdminLoggedIn) {
-    return (
-      <AdminDashboard 
-        onLogout={() => {
-          setIsAdminLoggedIn(false);
-          setShowAdminLogin(false);
-        }} 
-      />
-    );
-  }
-
-  if (!isLoggedIn || !currentUser) {
+  // Redirect if not logged in
+  if (!currentUser) {
     return null; // Will redirect in useEffect
   }
 
@@ -156,12 +174,12 @@ const AppPage = () => {
           {/* Navigation Buttons */}
           <div className="flex space-x-2">
             <Button
-              variant={currentView === "demo" ? "secondary" : "ghost"}
-              onClick={() => setCurrentView("demo")}
-              className={currentView === "demo" ? "" : "text-white hover:bg-white/10"}
+              variant="outline"
+              className="bg-white/10 hover:bg-white/20 border-white/20 text-white"
+              onClick={() => navigate('/attendance')}
             >
-              <Home className="h-4 w-4 mr-2" />
-              Demo
+              <UserCheck className="h-4 w-4 mr-2" />
+              Employee Attendance
             </Button>
             <Button
               variant={currentView === "dashboard" ? "secondary" : "ghost"}
@@ -188,12 +206,12 @@ const AppPage = () => {
               Accounting
             </Button>
             <Button
-              variant="ghost"
-              onClick={() => setShowAdminLogin(true)}
-              className="text-white hover:bg-white/10"
+              variant={currentView === "settings" ? "secondary" : "ghost"}
+              onClick={() => setCurrentView("settings")}
+              className={currentView === "settings" ? "" : "text-white hover:bg-white/10"}
             >
-              <Shield className="h-4 w-4 mr-2" />
-              Admin Panel
+              <Settings className="h-4 w-4 mr-2" />
+              Settings
             </Button>
             <Button
               variant="ghost"
@@ -208,15 +226,15 @@ const AppPage = () => {
       </div>
 
       {/* Main Content */}
-      <div className={currentView === "demo" ? "" : "max-w-7xl mx-auto p-6"}>
-        {currentView !== "demo" && hasMultipleLocations && (
+      <div className="max-w-7xl mx-auto p-6">
+        {hasMultipleLocations && (
           <BusinessSelector 
             selectedBusiness={selectedBusiness}
             onBusinessChange={setSelectedBusiness}
           />
         )}
         
-        {currentView !== "demo" && userBusinessType && !hasMultipleLocations && (
+        {userBusinessType && !hasMultipleLocations && (
           <div className="mb-6 p-4 bg-card rounded-lg border">
             <div className="flex items-center space-x-3">
               <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">

@@ -119,11 +119,11 @@ const Landing = () => {
             </div>
 
             <Button
-              onClick={() => navigate('/register')}
+              onClick={() => navigate('/contact')}
               className="bg-orange-500 hover:bg-orange-600 text-white px-8 py-6 text-lg"
               size="lg"
             >
-              Start Your Business Journey
+              Get in Touch for Setup
             </Button>
           </div>
 
