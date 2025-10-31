@@ -3,8 +3,13 @@ import { Calendar, Clock, User, Plus, DollarSign, Phone, Mail, CreditCard } from
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/hooks/use-toast";
 import { OfflinePOS } from "@/components/pos/OfflinePOS";
-import { dbGetAll } from "@/lib/indexeddb";
+import { dbGetAll, dbPut, dbDelete } from "@/lib/indexeddb";
+import { BulkUpload } from "@/components/common/BulkUpload";
 
 interface Appointment {
   id: string;
@@ -20,23 +25,77 @@ interface Appointment {
 }
 
 // No hardcoded demo data; load from IndexedDB
-interface ServiceItem { name: string; duration: number; price: number; id: string }
+interface ServiceItem { 
+  id: string;
+  name: string; 
+  duration: number; 
+  price: number;
+  description?: string;
+}
 
 export function AppointmentDashboard() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [services, setServices] = useState<ServiceItem[]>([]);
   const [showPOS, setShowPOS] = useState(false);
+  const [showServiceForm, setShowServiceForm] = useState(false);
+  const [editingService, setEditingService] = useState<ServiceItem | null>(null);
+  const { toast } = useToast();
   
+  const loadData = async () => {
+    const [apt, svc] = await Promise.all([
+      dbGetAll<Appointment>('appointments'),
+      dbGetAll<ServiceItem>('services')
+    ]);
+    setAppointments(apt || []);
+    setServices(svc || []);
+  };
+
   useEffect(() => {
-    (async () => {
-      const [apt, svc] = await Promise.all([
-        dbGetAll<Appointment>('appointments'),
-        dbGetAll<ServiceItem>('services')
-      ]);
-      setAppointments(apt);
-      setServices(svc);
-    })();
+    loadData();
+    const handleUpdate = () => loadData();
+    window.addEventListener('focus', handleUpdate);
+    return () => window.removeEventListener('focus', handleUpdate);
   }, []);
+
+  const handleSaveService = async (service: ServiceItem) => {
+    try {
+      const serviceWithId = service.id 
+        ? service 
+        : { ...service, id: `svc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` };
+      
+      await dbPut('services', serviceWithId);
+      await loadData();
+      toast({
+        title: "Success",
+        description: `Service ${editingService ? 'updated' : 'added'} successfully`
+      });
+      setEditingService(null);
+      setShowServiceForm(false);
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to save service",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleDeleteService = async (id: string) => {
+    try {
+      await dbDelete('services', id);
+      await loadData();
+      toast({
+        title: "Success",
+        description: "Service deleted successfully"
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to delete service",
+        variant: "destructive"
+      });
+    }
+  };
   
   const today = new Date().toISOString().slice(0,10);
   const todayAppointments = appointments.filter(apt => apt.date === today);
@@ -61,8 +120,19 @@ export function AppointmentDashboard() {
 
   return (
     <div className="space-y-6">
-      {/* POS Button */}
-      <div className="flex justify-end">
+      {/* Actions */}
+      <div className="flex justify-end gap-2">
+        <BulkUpload
+          businessType="service"
+          storeName="services"
+          fields={[
+            { name: 'name', label: 'Service Name', type: 'text', required: true },
+            { name: 'description', label: 'Description', type: 'text', required: false },
+            { name: 'duration', label: 'Duration (minutes)', type: 'number', required: true },
+            { name: 'price', label: 'Price', type: 'number', required: true }
+          ]}
+          onUploadComplete={loadData}
+        />
         <Button 
           onClick={() => setShowPOS(true)}
           className="bg-success hover:bg-success/90 text-white"
@@ -117,10 +187,6 @@ export function AppointmentDashboard() {
           <CardHeader>
             <div className="flex justify-between items-center">
               <CardTitle>Appointments</CardTitle>
-              <Button className="bg-gradient-primary">
-                <Plus className="h-4 w-4 mr-2" />
-                Book Appointment
-              </Button>
             </div>
           </CardHeader>
           <CardContent>
@@ -174,30 +240,161 @@ export function AppointmentDashboard() {
         {/* Services */}
         <Card>
           <CardHeader>
-            <CardTitle>Services</CardTitle>
+            <div className="flex justify-between items-center">
+              <CardTitle>Services</CardTitle>
+              <Button 
+                size="sm"
+                onClick={() => {
+                  setEditingService(null);
+                  setShowServiceForm(true);
+                }}
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Add Service
+              </Button>
+            </div>
           </CardHeader>
           <CardContent>
-            <div className="space-y-3">
-              {services.map((service, index) => (
-                <div key={index} className="flex justify-between items-center p-3 border rounded-lg">
-                  <div>
-                    <h4 className="font-medium">{service.name}</h4>
-                    <p className="text-sm text-muted-foreground">{service.duration} minutes</p>
+            {services.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                <p>No services available</p>
+                <p className="text-sm mt-2">Add services to enable booking</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {services.map((service) => (
+                  <div key={service.id} className="flex justify-between items-center p-3 border rounded-lg hover:shadow-md transition-shadow">
+                    <div className="flex-1">
+                      <h4 className="font-medium">{service.name}</h4>
+                      {service.description && (
+                        <p className="text-sm text-muted-foreground">{service.description}</p>
+                      )}
+                      <p className="text-sm text-muted-foreground">{service.duration} minutes</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <p className="font-medium">₹{service.price}</p>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setEditingService(service);
+                          setShowServiceForm(true);
+                        }}
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleDeleteService(service.id)}
+                      >
+                        Delete
+                      </Button>
+                    </div>
                   </div>
-                  <div className="text-right">
-                    <p className="font-medium">₹{service.price}</p>
-                    <Button variant="ghost" size="sm">Edit</Button>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <Button variant="outline" className="w-full mt-4">
-              <Plus className="h-4 w-4 mr-2" />
-              Add Service
-            </Button>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
+
+        {/* Service Form Dialog */}
+        <Dialog open={showServiceForm} onOpenChange={setShowServiceForm}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{editingService ? 'Edit Service' : 'Add New Service'}</DialogTitle>
+            </DialogHeader>
+            <ServiceForm
+              service={editingService}
+              onSave={handleSaveService}
+              onCancel={() => {
+                setEditingService(null);
+                setShowServiceForm(false);
+              }}
+            />
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
+  );
+}
+
+function ServiceForm({
+  service,
+  onSave,
+  onCancel
+}: {
+  service: ServiceItem | null;
+  onSave: (service: ServiceItem) => void;
+  onCancel: () => void;
+}) {
+  const [formData, setFormData] = useState({
+    name: service?.name || "",
+    description: service?.description || "",
+    duration: service?.duration || 60,
+    price: service?.price || 0
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.name || formData.duration <= 0 || formData.price <= 0) {
+      return;
+    }
+    
+    onSave({
+      id: service?.id || "",
+      ...formData
+    });
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4 mt-4">
+      <div>
+        <label className="text-sm font-medium">Service Name</label>
+        <Input
+          value={formData.name}
+          onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
+          required
+        />
+      </div>
+      
+      <div>
+        <label className="text-sm font-medium">Description</label>
+        <Textarea
+          value={formData.description}
+          onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
+          placeholder="Service description..."
+        />
+      </div>
+      
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="text-sm font-medium">Duration (minutes)</label>
+          <Input
+            type="number"
+            min="1"
+            value={formData.duration}
+            onChange={(e) => setFormData(prev => ({ ...prev, duration: parseInt(e.target.value) || 0 }))}
+            required
+          />
+        </div>
+        <div>
+          <label className="text-sm font-medium">Price (₹)</label>
+          <Input
+            type="number"
+            min="0"
+            step="0.01"
+            value={formData.price}
+            onChange={(e) => setFormData(prev => ({ ...prev, price: parseFloat(e.target.value) || 0 }))}
+            required
+          />
+        </div>
+      </div>
+
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
+        <Button type="submit">{service ? 'Update' : 'Add'} Service</Button>
+      </div>
+    </form>
   );
 }

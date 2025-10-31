@@ -44,12 +44,16 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
     offlineDataSize: '0 MB',
     lastSync: 'Never'
   });
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  // Default to online - app works offline-first, so assume online unless definitely offline
+  const [isOnline, setIsOnline] = useState(() => navigator.onLine !== false);
   const [isSyncing, setIsSyncing] = useState(false);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
+
+    // Update status based on navigator (optimistic)
+    setIsOnline(navigator.onLine !== false);
 
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);

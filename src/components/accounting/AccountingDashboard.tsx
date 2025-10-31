@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { dbGetAll, dbPut } from "@/lib/indexeddb";
+import { QRCodeSVG } from "qrcode.react";
 
 interface Invoice {
   id: string;
@@ -33,11 +34,14 @@ interface Invoice {
   items: InvoiceItem[];
   subtotal: number;
   tax: number;
+  taxRate: number;
   total: number;
   status: 'draft' | 'sent' | 'paid' | 'overdue';
   issueDate: string;
   dueDate: string;
   notes: string;
+  description?: string; // Overall invoice description
+  upiId?: string; // UPI ID for payment QR code
   createdAt: string;
   updatedAt: string;
 }
@@ -453,7 +457,9 @@ function InvoiceForm({ onSave, onCancel }: {
     issueDate: new Date().toISOString().split('T')[0],
     dueDate: '',
     notes: '',
-    taxRate: 10,
+    description: '',
+    taxRate: 18, // Default GST rate
+    upiId: '',
   });
   
   const [items, setItems] = useState<InvoiceItem[]>([
@@ -511,6 +517,7 @@ function InvoiceForm({ onSave, onCancel }: {
       items: items.filter(item => item.description),
       subtotal,
       tax,
+      taxRate: formData.taxRate,
       total,
       status: 'draft',
       createdAt: new Date().toISOString(),
@@ -584,6 +591,39 @@ function InvoiceForm({ onSave, onCancel }: {
             onChange={(e) => setFormData(prev => ({ ...prev, clientAddress: e.target.value }))}
             placeholder="Enter client address"
           />
+        </div>
+
+        <div>
+          <label className="text-sm font-medium">Invoice Description</label>
+          <Textarea
+            value={formData.description}
+            onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
+            placeholder="Enter overall invoice description or terms..."
+            rows={3}
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="text-sm font-medium">Tax Rate (%)</label>
+            <Input
+              type="number"
+              value={formData.taxRate}
+              onChange={(e) => setFormData(prev => ({ ...prev, taxRate: parseFloat(e.target.value) || 0 }))}
+              placeholder="18"
+              min="0"
+              max="100"
+            />
+            <p className="text-xs text-muted-foreground mt-1">Common rates: 5%, 12%, 18%, 28%</p>
+          </div>
+          <div>
+            <label className="text-sm font-medium">UPI ID (for payment QR code)</label>
+            <Input
+              value={formData.upiId}
+              onChange={(e) => setFormData(prev => ({ ...prev, upiId: e.target.value }))}
+              placeholder="yourbusiness@upi or mobile@paytm"
+            />
+          </div>
         </div>
 
         <div>
@@ -701,25 +741,113 @@ function InvoiceDetails({ invoice, onBack, onUpdate }: {
     });
   };
 
+  const downloadInvoicePDF = () => {
+    // Generate UPI payment string
+    const upiPaymentString = invoice.upiId 
+      ? `upi://pay?pa=${encodeURIComponent(invoice.upiId)}&am=${invoice.total}&cu=INR&tn=${encodeURIComponent(`Payment for ${invoice.invoiceNumber}`)}`
+      : '';
+
+    // Create HTML content for PDF
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="UTF-8">
+          <title>Invoice ${invoice.invoiceNumber}</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 40px; }
+            .header { margin-bottom: 30px; }
+            .invoice-title { font-size: 24px; font-weight: bold; margin-bottom: 10px; }
+            .section { margin-bottom: 20px; }
+            .billing-info { display: flex; justify-content: space-between; }
+            .items-table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+            .items-table th, .items-table td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
+            .items-table th { background-color: #f5f5f5; }
+            .total-section { text-align: right; margin-top: 20px; }
+            .total-row { margin: 5px 0; }
+            .total-final { font-size: 18px; font-weight: bold; border-top: 2px solid #000; padding-top: 10px; }
+            .qr-code { text-align: center; margin: 20px 0; }
+            .description { margin: 20px 0; padding: 10px; background-color: #f9f9f9; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div class="invoice-title">INVOICE ${invoice.invoiceNumber}</div>
+            <div>Issue Date: ${invoice.issueDate}</div>
+            <div>Due Date: ${invoice.dueDate}</div>
+          </div>
+          
+          <div class="billing-info">
+            <div class="section">
+              <h3>Bill To:</h3>
+              <p><strong>${invoice.clientName}</strong></p>
+              <p>${invoice.clientEmail || ''}</p>
+              <p>${invoice.clientAddress || ''}</p>
+            </div>
+          </div>
+
+          ${invoice.description ? `<div class="description"><strong>Description:</strong><br>${invoice.description}</div>` : ''}
+
+          <table class="items-table">
+            <thead>
+              <tr>
+                <th>Description</th>
+                <th>Quantity</th>
+                <th>Rate</th>
+                <th>Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${invoice.items.map(item => `
+                <tr>
+                  <td>${item.description}</td>
+                  <td>${item.quantity}</td>
+                  <td>₹${item.rate.toFixed(2)}</td>
+                  <td>₹${item.amount.toFixed(2)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+
+          <div class="total-section">
+            <div class="total-row">Subtotal: ₹${invoice.subtotal.toFixed(2)}</div>
+            <div class="total-row">Tax (${invoice.taxRate}%): ₹${invoice.tax.toFixed(2)}</div>
+            <div class="total-row total-final">Total: ₹${invoice.total.toFixed(2)}</div>
+          </div>
+
+          ${invoice.upiId ? `
+            <div class="qr-code">
+              <h3>Scan to Pay via UPI</h3>
+              <div id="qrcode-container"></div>
+              <p>UPI ID: ${invoice.upiId}</p>
+            </div>
+          ` : ''}
+
+          ${invoice.notes ? `<div class="section"><strong>Notes:</strong><br>${invoice.notes}</div>` : ''}
+        </body>
+      </html>
+    `;
+
+    // Open in new window for printing/downloading
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.write(htmlContent);
+      printWindow.document.close();
+      
+      // Wait for QR code if needed, then trigger print
+      setTimeout(() => {
+        printWindow.print();
+      }, 500);
+      
+      toast({
+        title: "Invoice Opened",
+        description: "Invoice opened in new window. Use browser print to save as PDF.",
+      });
+    }
+  };
+
   const downloadInvoice = () => {
-    const invoiceData = {
-      ...invoice,
-      downloadedAt: new Date().toISOString()
-    };
-    
-    const dataStr = JSON.stringify(invoiceData, null, 2);
-    const dataBlob = new Blob([dataStr], { type: "application/json" });
-    const url = URL.createObjectURL(dataBlob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${invoice.invoiceNumber}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
-    
-    toast({
-      title: "Invoice Downloaded",
-      description: `${invoice.invoiceNumber} has been downloaded.`,
-    });
+    downloadInvoicePDF();
   };
 
   return (
@@ -744,7 +872,7 @@ function InvoiceDetails({ invoice, onBack, onUpdate }: {
           <div className="flex gap-2">
             <Button variant="outline" onClick={downloadInvoice}>
               <Download className="h-4 w-4 mr-2" />
-              Download
+              Download PDF
             </Button>
             {invoice.status === 'draft' && (
               <Button onClick={() => updateStatus('sent')}>
@@ -809,16 +937,42 @@ function InvoiceDetails({ invoice, onBack, onUpdate }: {
               <span>Subtotal:</span>
               <span>₹{invoice.subtotal.toFixed(2)}</span>
             </div>
-            <div className="flex justify-between">
-              <span>Tax:</span>
-              <span>₹{invoice.tax.toFixed(2)}</span>
-            </div>
+              <div className="flex justify-between">
+                <span>Tax ({invoice.taxRate || 18}%):</span>
+                <span>₹{invoice.tax.toFixed(2)}</span>
+              </div>
             <div className="flex justify-between font-bold text-lg border-t pt-2">
               <span>Total:</span>
               <span>₹{invoice.total.toFixed(2)}</span>
             </div>
           </div>
         </div>
+
+        {invoice.description && (
+          <div>
+            <h3 className="font-semibold mb-2">Invoice Description</h3>
+            <p className="text-muted-foreground whitespace-pre-line">{invoice.description}</p>
+          </div>
+        )}
+
+        {invoice.upiId && (
+          <div className="border-t pt-4">
+            <h3 className="font-semibold mb-4 text-center">Pay via UPI</h3>
+            <div className="flex flex-col items-center gap-4">
+              <div className="bg-white p-4 rounded-lg border">
+                <QRCodeSVG 
+                  value={`upi://pay?pa=${encodeURIComponent(invoice.upiId)}&am=${invoice.total}&cu=INR&tn=${encodeURIComponent(`Payment for ${invoice.invoiceNumber}`)}`}
+                  size={200}
+                />
+              </div>
+              <div className="text-center">
+                <p className="text-sm font-medium">Scan to Pay</p>
+                <p className="text-xs text-muted-foreground mt-1">UPI ID: {invoice.upiId}</p>
+                <p className="text-xs text-muted-foreground">Amount: ₹{invoice.total.toFixed(2)}</p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {invoice.notes && (
           <div>

@@ -6,7 +6,9 @@ import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { OfflinePOS } from "@/components/pos/OfflinePOS";
-import { dbGetAll } from "@/lib/indexeddb";
+import { dbGetAll, dbPut } from "@/lib/indexeddb";
+import { useToast } from "@/hooks/use-toast";
+import { BulkUpload } from "@/components/common/BulkUpload";
 
 interface Product {
   id: string;
@@ -32,26 +34,93 @@ export function InventoryDashboard() {
     lowStockThreshold: 0,
     category: ""
   });
+  const { toast } = useToast();
+
+  const loadProducts = async () => {
+    const rows = await dbGetAll<Product>('products');
+    setProducts(rows);
+  };
 
   useEffect(() => {
-    (async () => {
-      const rows = await dbGetAll<Product>('products');
-      setProducts(rows);
-    })();
+    loadProducts();
+    
+    // Listen for inventory update events from POS
+    const handleInventoryUpdate = () => {
+      loadProducts();
+    };
+    
+    // Reload products when window gains focus (in case stock was updated in POS)
+    const handleFocus = () => {
+      loadProducts();
+    };
+    
+    window.addEventListener('inventory-updated', handleInventoryUpdate);
+    window.addEventListener('focus', handleFocus);
+    
+    // Also reload periodically (every 5 seconds) as fallback
+    const interval = setInterval(loadProducts, 5000);
+    
+    return () => {
+      window.removeEventListener('inventory-updated', handleInventoryUpdate);
+      window.removeEventListener('focus', handleFocus);
+      clearInterval(interval);
+    };
   }, []);
 
   const handleSaveProduct = async () => {
-    if (!newProduct.name || !newProduct.sku) return;
-    const prod = newProduct.id
-      ? newProduct
-      : { ...newProduct, id: `prod_${Date.now()}_${Math.random().toString(36).slice(2,8)}` };
-    await dbPut('products', prod);
-    setProducts((prev) => {
-      const exists = prev.some((p) => p.id === prod.id);
-      return exists ? prev.map((p) => (p.id === prod.id ? prod : p)) : [...prev, prod];
-    });
-    setShowAdd(false);
-    setNewProduct({ id: "", name: "", sku: "", price: 0, stock: 0, lowStockThreshold: 0, category: "" });
+    // Validation
+    if (!newProduct.name || !newProduct.name.trim()) {
+      toast({
+        title: "Validation Error",
+        description: "Product name is required",
+        variant: "destructive"
+      });
+      return;
+    }
+    
+    if (!newProduct.sku || !newProduct.sku.trim()) {
+      toast({
+        title: "Validation Error",
+        description: "SKU is required",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    if (newProduct.price <= 0) {
+      toast({
+        title: "Validation Error",
+        description: "Price must be greater than 0",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    try {
+      const prod = newProduct.id
+        ? newProduct
+        : { ...newProduct, id: `prod_${Date.now()}_${Math.random().toString(36).slice(2,8)}` };
+      
+      await dbPut('products', prod);
+      
+      // Reload products from IndexedDB to ensure consistency
+      await loadProducts();
+      
+      toast({
+        title: "Success",
+        description: `Product "${prod.name}" ${newProduct.id ? 'updated' : 'added'} successfully`,
+      });
+      
+      setShowAdd(false);
+      setNewProduct({ id: "", name: "", sku: "", price: 0, stock: 0, lowStockThreshold: 0, category: "" });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to save product. Please try again.",
+        variant: "destructive"
+      });
+      console.error('Error saving product:', error);
+    }
   };
 
   const filteredProducts = products.filter(product =>
@@ -69,8 +138,22 @@ export function InventoryDashboard() {
 
   return (
     <div className="space-y-6">
-      {/* POS Button */}
-      <div className="flex justify-end">
+      {/* Actions */}
+      <div className="flex justify-end gap-2">
+        <BulkUpload
+          businessType="retail"
+          storeName="products"
+          fields={[
+            { name: 'name', label: 'Name', type: 'text', required: true },
+            { name: 'sku', label: 'SKU', type: 'text', required: true },
+            { name: 'price', label: 'Price', type: 'number', required: true },
+            { name: 'stock', label: 'Stock', type: 'number', required: false },
+            { name: 'lowStockThreshold', label: 'Low Stock Threshold', type: 'number', required: false },
+            { name: 'category', label: 'Category', type: 'text', required: false },
+            { name: 'description', label: 'Description', type: 'text', required: false }
+          ]}
+          onUploadComplete={loadProducts}
+        />
         <Button 
           onClick={() => setShowPOS(true)}
           className="bg-success hover:bg-success/90 text-white"
@@ -131,39 +214,84 @@ export function InventoryDashboard() {
           </div>
         </CardHeader>
         <CardContent>
-          <Dialog open={showAdd} onOpenChange={setShowAdd}>
+          <Dialog open={showAdd} onOpenChange={(open) => {
+            setShowAdd(open);
+            if (!open) {
+              // Reset form when dialog closes
+              setNewProduct({ id: "", name: "", sku: "", price: 0, stock: 0, lowStockThreshold: 0, category: "" });
+            }
+          }}>
             <DialogContent>
               <DialogHeader>
                 <DialogTitle>Add Product</DialogTitle>
               </DialogHeader>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="text-sm font-medium">Name</label>
-                  <Input value={newProduct.name} onChange={(e) => setNewProduct(prev => ({ ...prev, name: e.target.value }))} />
+                  <label className="text-sm font-medium">Name *</label>
+                  <Input 
+                    value={newProduct.name} 
+                    onChange={(e) => setNewProduct(prev => ({ ...prev, name: e.target.value }))}
+                    placeholder="Product name"
+                  />
                 </div>
                 <div>
-                  <label className="text-sm font-medium">SKU</label>
-                  <Input value={newProduct.sku} onChange={(e) => setNewProduct(prev => ({ ...prev, sku: e.target.value }))} />
+                  <label className="text-sm font-medium">SKU *</label>
+                  <Input 
+                    value={newProduct.sku} 
+                    onChange={(e) => setNewProduct(prev => ({ ...prev, sku: e.target.value }))}
+                    placeholder="Product SKU"
+                  />
                 </div>
                 <div>
-                  <label className="text-sm font-medium">Price</label>
-                  <Input type="number" step="0.01" value={newProduct.price} onChange={(e) => setNewProduct(prev => ({ ...prev, price: parseFloat(e.target.value) || 0 }))} />
+                  <label className="text-sm font-medium">Price *</label>
+                  <Input 
+                    type="number" 
+                    step="0.01" 
+                    min="0.01"
+                    value={newProduct.price || ''} 
+                    onChange={(e) => setNewProduct(prev => ({ ...prev, price: parseFloat(e.target.value) || 0 }))}
+                    placeholder="0.00"
+                  />
                 </div>
                 <div>
                   <label className="text-sm font-medium">Stock</label>
-                  <Input type="number" value={newProduct.stock} onChange={(e) => setNewProduct(prev => ({ ...prev, stock: parseInt(e.target.value) || 0 }))} />
+                  <Input 
+                    type="number" 
+                    min="0"
+                    value={newProduct.stock || ''} 
+                    onChange={(e) => setNewProduct(prev => ({ ...prev, stock: parseInt(e.target.value) || 0 }))}
+                    placeholder="0"
+                  />
                 </div>
                 <div>
                   <label className="text-sm font-medium">Low Stock Threshold</label>
-                  <Input type="number" value={newProduct.lowStockThreshold} onChange={(e) => setNewProduct(prev => ({ ...prev, lowStockThreshold: parseInt(e.target.value) || 0 }))} />
+                  <Input 
+                    type="number" 
+                    min="0"
+                    value={newProduct.lowStockThreshold || ''} 
+                    onChange={(e) => setNewProduct(prev => ({ ...prev, lowStockThreshold: parseInt(e.target.value) || 0 }))}
+                    placeholder="0"
+                  />
                 </div>
                 <div>
                   <label className="text-sm font-medium">Category</label>
-                  <Input value={newProduct.category} onChange={(e) => setNewProduct(prev => ({ ...prev, category: e.target.value }))} />
+                  <Input 
+                    value={newProduct.category} 
+                    onChange={(e) => setNewProduct(prev => ({ ...prev, category: e.target.value }))}
+                    placeholder="Category name"
+                  />
                 </div>
               </div>
               <div className="flex justify-end gap-2 mt-4">
-                <Button variant="outline" onClick={() => setShowAdd(false)}>Cancel</Button>
+                <Button 
+                  variant="outline" 
+                  onClick={() => {
+                    setShowAdd(false);
+                    setNewProduct({ id: "", name: "", sku: "", price: 0, stock: 0, lowStockThreshold: 0, category: "" });
+                  }}
+                >
+                  Cancel
+                </Button>
                 <Button onClick={handleSaveProduct}>Save</Button>
               </div>
             </DialogContent>

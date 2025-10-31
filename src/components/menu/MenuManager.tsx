@@ -46,6 +46,7 @@ interface Category {
 
 import { dbGetAll, dbPut, dbDelete } from "@/lib/indexeddb";
 import { deleteOne, syncCategoriesToLocal, syncProductsToLocal, upsertOne } from "@/lib/sync";
+import { BulkUpload } from "@/components/common/BulkUpload";
 
 export function MenuManager({ businessType = "restaurant" }: { businessType?: string }) {
   const [categories, setCategories] = useState<Category[]>([]);
@@ -119,6 +120,21 @@ export function MenuManager({ businessType = "restaurant" }: { businessType?: st
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold">Menu Management</h2>
         <div className="flex gap-2">
+          <BulkUpload
+            businessType={businessType}
+            storeName="products"
+            fields={[
+              { name: 'name', label: 'Name', type: 'text', required: true },
+              { name: 'price', label: 'Price', type: 'number', required: true },
+              { name: 'category', label: 'Category', type: 'text', required: false },
+              { name: 'description', label: 'Description', type: 'text', required: false },
+              { name: 'stock', label: 'Stock', type: 'number', required: false }
+            ]}
+            onUploadComplete={() => {
+              loadMenu();
+              loadCategories();
+            }}
+          />
           <Dialog open={isAddingCategory} onOpenChange={setIsAddingCategory}>
             <DialogTrigger asChild>
               <Button variant="outline">

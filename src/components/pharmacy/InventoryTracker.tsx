@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { dbGetAll, dbPut, dbDelete } from "@/lib/indexeddb";
+import { BulkUpload } from "@/components/common/BulkUpload";
 
 interface Medicine {
   id: string;
@@ -144,7 +145,26 @@ export function InventoryTracker() {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold">Pharmacy Inventory</h2>
-        <Dialog open={isAddingMedicine} onOpenChange={setIsAddingMedicine}>
+        <div className="flex gap-2">
+          <BulkUpload
+            businessType="healthcare"
+            storeName="medicines"
+            fields={[
+              { name: 'name', label: 'Medicine Name', type: 'text', required: true },
+              { name: 'manufacturer', label: 'Manufacturer', type: 'text', required: false },
+              { name: 'batchNumber', label: 'Batch Number', type: 'text', required: false },
+              { name: 'expiryDate', label: 'Expiry Date', type: 'text', required: false },
+              { name: 'quantity', label: 'Quantity', type: 'number', required: true },
+              { name: 'price', label: 'Price', type: 'number', required: true },
+              { name: 'lowStockThreshold', label: 'Low Stock Threshold', type: 'number', required: false },
+              { name: 'category', label: 'Category', type: 'text', required: false }
+            ]}
+            onUploadComplete={async () => {
+              const rows = await dbGetAll<Medicine>('medicines');
+              setMedicines(rows);
+            }}
+          />
+          <Dialog open={isAddingMedicine} onOpenChange={setIsAddingMedicine}>
           <DialogTrigger asChild>
             <Button>
               <Plus className="h-4 w-4 mr-2" />

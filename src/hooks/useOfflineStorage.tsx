@@ -20,12 +20,17 @@ export function useOfflineStorage<T extends { id: string }>(
   const [data, setData] = useState<T[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  // Default to online - app works offline-first, so assume online unless definitely offline
+  // Only show offline status if navigator.onLine is explicitly false
+  const [isOnline, setIsOnline] = useState(() => navigator.onLine !== false);
 
-  // Monitor online status
+  // Monitor online status - optimistic approach since app is offline-first
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
+
+    // Update status based on navigator
+    setIsOnline(navigator.onLine !== false);
 
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);

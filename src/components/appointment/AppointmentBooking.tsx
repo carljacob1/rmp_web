@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Calendar, Clock, User, Mail, Phone, QrCode, Send } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Calendar, Clock, User, Mail, Phone, QrCode, Send, Plus } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,6 +8,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
+import { dbGetAll, dbPut, dbDelete } from "@/lib/indexeddb";
+import { BulkUpload } from "@/components/common/BulkUpload";
 
 interface Service {
   id: string;
@@ -30,6 +32,7 @@ interface Appointment {
   status: "scheduled" | "completed" | "cancelled" | "no-show";
   notes?: string;
   googleEventId?: string;
+  timestamp?: string;
 }
 
 interface Invoice {
@@ -42,20 +45,43 @@ interface Invoice {
   paymentMethod?: string;
 }
 
-const services: Service[] = [
-  { id: "1", name: "Hair Cut & Style", duration: 60, price: 85, description: "Professional haircut and styling" },
-  { id: "2", name: "Deep Tissue Massage", duration: 90, price: 120, description: "Therapeutic deep tissue massage" },
-  { id: "3", name: "Facial Treatment", duration: 75, price: 95, description: "Rejuvenating facial treatment" },
-  { id: "4", name: "Manicure & Pedicure", duration: 45, price: 65, description: "Complete nail care service" },
-];
-
 export function AppointmentBooking() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [services, setServices] = useState<Service[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [showBookingForm, setShowBookingForm] = useState(false);
+  const [showServiceForm, setShowServiceForm] = useState(false);
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
+  const [editingService, setEditingService] = useState<Service | null>(null);
   const { toast } = useToast();
+
+  // Load appointments and services from IndexedDB
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        const [apts, svcs] = await Promise.all([
+          dbGetAll<Appointment>('appointments'),
+          dbGetAll<Service>('services')
+        ]);
+        setAppointments(apts || []);
+        setServices(svcs || []);
+      } catch (error) {
+        console.error('Error loading appointment data:', error);
+        toast({
+          title: "Error",
+          description: "Failed to load appointments and services",
+          variant: "destructive"
+        });
+      }
+    };
+    loadData();
+    
+    // Listen for updates
+    const handleUpdate = () => loadData();
+    window.addEventListener('focus', handleUpdate);
+    return () => window.removeEventListener('focus', handleUpdate);
+  }, [toast]);
 
   const generateBarcode = (invoiceId: string): string => {
     // Simple barcode generation - in real implementation, use proper barcode library
@@ -63,32 +89,91 @@ export function AppointmentBooking() {
   };
 
   const handleBookAppointment = async (appointmentData: Omit<Appointment, 'id' | 'status' | 'googleEventId'>) => {
-    const newAppointment: Appointment = {
-      ...appointmentData,
-      id: Date.now().toString(),
-      status: "scheduled"
-    };
-
-    // Simulate Google Calendar sync
     try {
-      // In real implementation, use Google Calendar API
-      const googleEventId = await syncWithGoogleCalendar(newAppointment);
-      newAppointment.googleEventId = googleEventId;
+      const newAppointment: Appointment = {
+        ...appointmentData,
+        id: `apt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        status: "scheduled",
+        timestamp: new Date().toISOString()
+      };
+
+      // Save to IndexedDB
+      await dbPut('appointments', newAppointment);
       
+      // Simulate Google Calendar sync (optional)
+      try {
+        const googleEventId = await syncWithGoogleCalendar(newAppointment);
+        newAppointment.googleEventId = googleEventId;
+        await dbPut('appointments', newAppointment); // Update with Google ID
+      } catch (error) {
+        // Google sync failed, but appointment is saved
+        console.log('Google Calendar sync failed, appointment still saved');
+      }
+      
+      // Update local state
       setAppointments(prev => [...prev, newAppointment]);
       toast({
         title: "Appointment Booked",
-        description: "Appointment scheduled and synced with Google Calendar"
+        description: "Appointment scheduled successfully"
       });
+      setShowBookingForm(false);
     } catch (error) {
-      setAppointments(prev => [...prev, newAppointment]);
+      console.error('Error booking appointment:', error);
       toast({
-        title: "Appointment Booked",
-        description: "Appointment scheduled (Google Calendar sync failed)"
+        title: "Error",
+        description: "Failed to book appointment. Please try again.",
+        variant: "destructive"
       });
     }
-    
-    setShowBookingForm(false);
+  };
+
+  const handleSaveService = async (service: Service) => {
+    try {
+      const serviceWithId = service.id 
+        ? service 
+        : { ...service, id: `svc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` };
+      
+      await dbPut('services', serviceWithId);
+      setServices(prev => {
+        const exists = prev.some(s => s.id === serviceWithId.id);
+        return exists 
+          ? prev.map(s => s.id === serviceWithId.id ? serviceWithId : s)
+          : [...prev, serviceWithId];
+      });
+      
+      toast({
+        title: "Success",
+        description: `Service ${editingService ? 'updated' : 'added'} successfully`
+      });
+      
+      setEditingService(null);
+      setShowServiceForm(false);
+    } catch (error) {
+      console.error('Error saving service:', error);
+      toast({
+        title: "Error",
+        description: "Failed to save service",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleDeleteService = async (id: string) => {
+    try {
+      await dbDelete('services', id);
+      setServices(prev => prev.filter(s => s.id !== id));
+      toast({
+        title: "Success",
+        description: "Service deleted successfully"
+      });
+    } catch (error) {
+      console.error('Error deleting service:', error);
+      toast({
+        title: "Error",
+        description: "Failed to delete service",
+        variant: "destructive"
+      });
+    }
   };
 
   const syncWithGoogleCalendar = async (appointment: Appointment): Promise<string> => {
@@ -259,23 +344,78 @@ export function AppointmentBooking() {
         {/* Services List */}
         <Card>
           <CardHeader>
-            <CardTitle>Available Services</CardTitle>
+            <div className="flex justify-between items-center">
+              <CardTitle>Available Services</CardTitle>
+              <div className="flex gap-2">
+                <BulkUpload
+                  businessType="service"
+                  storeName="services"
+                  fields={[
+                    { name: 'name', label: 'Service Name', type: 'text', required: true },
+                    { name: 'description', label: 'Description', type: 'text', required: false },
+                    { name: 'duration', label: 'Duration (minutes)', type: 'number', required: true },
+                    { name: 'price', label: 'Price', type: 'number', required: true }
+                  ]}
+                  onUploadComplete={async () => {
+                    const svcs = await dbGetAll<Service>('services');
+                    setServices(svcs || []);
+                  }}
+                />
+                <Button 
+                  size="sm"
+                  onClick={() => {
+                    setEditingService(null);
+                    setShowServiceForm(true);
+                  }}
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Service
+                </Button>
+              </div>
+            </div>
           </CardHeader>
           <CardContent>
-            <div className="space-y-3">
-              {services.map(service => (
-                <div key={service.id} className="p-3 border rounded-lg">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <h4 className="font-medium">{service.name}</h4>
-                      <p className="text-sm text-muted-foreground">{service.description}</p>
-                      <p className="text-sm text-muted-foreground">{service.duration} minutes</p>
+            {services.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                <Calendar className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                <p>No services available</p>
+                <p className="text-sm mt-2">Add services to enable appointment booking</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {services.map(service => (
+                  <div key={service.id} className="p-3 border rounded-lg hover:shadow-md transition-shadow">
+                    <div className="flex justify-between items-start">
+                      <div className="flex-1">
+                        <h4 className="font-medium">{service.name}</h4>
+                        <p className="text-sm text-muted-foreground">{service.description}</p>
+                        <p className="text-sm text-muted-foreground">{service.duration} minutes</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">₹{service.price}</span>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setEditingService(service);
+                            setShowServiceForm(true);
+                          }}
+                        >
+                          Edit
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleDeleteService(service.id)}
+                        >
+                          Delete
+                        </Button>
+                      </div>
                     </div>
-                    <span className="font-medium">₹{service.price}</span>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -294,6 +434,20 @@ export function AppointmentBooking() {
               onSend={(invoice) => sendInvoice(invoice, selectedAppointment)}
             />
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Service Form Modal */}
+      <Dialog open={showServiceForm} onOpenChange={setShowServiceForm}>
+        <DialogContent>
+          <ServiceForm
+            service={editingService}
+            onSave={handleSaveService}
+            onCancel={() => {
+              setEditingService(null);
+              setShowServiceForm(false);
+            }}
+          />
         </DialogContent>
       </Dialog>
     </div>
@@ -323,10 +477,14 @@ function BookingForm({
     e.preventDefault();
     if (!formData.clientName || !formData.service || !formData.date || !formData.time) return;
     
-    const selectedService = services.find(s => s.id === formData.service)!;
+    const selectedService = services.find(s => s.id === formData.service);
+    if (!selectedService) {
+      return;
+    }
     
     onBook({
       ...formData,
+      service: selectedService.name, // Store service name for display
       duration: selectedService.duration,
       price: selectedService.price
     });
@@ -491,4 +649,90 @@ function getInvoiceStatusColor(status: string) {
     case "overdue": return "bg-destructive text-destructive-foreground";
     default: return "bg-secondary text-secondary-foreground";
   }
+}
+
+function ServiceForm({
+  service,
+  onSave,
+  onCancel
+}: {
+  service: Service | null;
+  onSave: (service: Service) => void;
+  onCancel: () => void;
+}) {
+  const [formData, setFormData] = useState({
+    name: service?.name || "",
+    description: service?.description || "",
+    duration: service?.duration || 60,
+    price: service?.price || 0
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.name || formData.duration <= 0 || formData.price <= 0) {
+      return;
+    }
+    
+    onSave({
+      id: service?.id || "",
+      ...formData
+    });
+  };
+
+  return (
+    <div>
+      <DialogHeader>
+        <DialogTitle>{service ? 'Edit Service' : 'Add New Service'}</DialogTitle>
+      </DialogHeader>
+      
+      <form onSubmit={handleSubmit} className="space-y-4 mt-4">
+        <div>
+          <label className="text-sm font-medium">Service Name</label>
+          <Input
+            value={formData.name}
+            onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
+            required
+          />
+        </div>
+        
+        <div>
+          <label className="text-sm font-medium">Description</label>
+          <Textarea
+            value={formData.description}
+            onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
+            placeholder="Service description..."
+          />
+        </div>
+        
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="text-sm font-medium">Duration (minutes)</label>
+            <Input
+              type="number"
+              min="1"
+              value={formData.duration}
+              onChange={(e) => setFormData(prev => ({ ...prev, duration: parseInt(e.target.value) || 0 }))}
+              required
+            />
+          </div>
+          <div>
+            <label className="text-sm font-medium">Price (₹)</label>
+            <Input
+              type="number"
+              min="0"
+              step="0.01"
+              value={formData.price}
+              onChange={(e) => setFormData(prev => ({ ...prev, price: parseFloat(e.target.value) || 0 }))}
+              required
+            />
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
+          <Button type="submit">{service ? 'Update' : 'Add'} Service</Button>
+        </div>
+      </form>
+    </div>
+  );
 }

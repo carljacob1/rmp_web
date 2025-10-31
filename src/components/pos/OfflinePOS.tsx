@@ -1,14 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { QRCodeSVG } from 'qrcode.react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
-import { X, Plus, Minus, ShoppingCart, CreditCard, ArrowLeft, Calculator } from 'lucide-react';
+import { X, Plus, Minus, ShoppingCart, CreditCard, ArrowLeft, Calculator, QrCode, Smartphone, Banknote, CheckCircle } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useOfflineStorage } from '@/hooks/useOfflineStorage';
-import { dbGetAll } from '@/lib/indexeddb';
+import { dbGetAll, dbPut, dbGetById } from '@/lib/indexeddb';
 import { upsertOne } from '@/lib/sync';
 
 interface CartItem {
@@ -17,6 +18,7 @@ interface CartItem {
   price: number;
   quantity: number;
   category: string;
+  productId?: string; // Store product ID for stock updates
 }
 
 interface CustomerInfo {
@@ -31,7 +33,13 @@ interface OfflinePOSProps {
 }
 
 interface CategoryRec { id: string; name: string; }
-interface ProductRec { id: string; name: string; price: number; category: string; }
+interface ProductRec { 
+  id: string; 
+  name: string; 
+  price: number; 
+  category: string;
+  stock?: number; // Stock/quantity available
+}
 
 export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose }) => {
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -44,8 +52,22 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
   const [showPayment, setShowPayment] = useState(false);
   const [showKeypad, setShowKeypad] = useState(false);
   const [keypadValue, setKeypadValue] = useState('');
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<'cash' | 'upi' | 'card' | null>(null);
+  const [upiId, setUpiId] = useState('');
+  const [paymentStatus, setPaymentStatus] = useState<'pending' | 'processing' | 'completed' | null>(null);
+  const [taxRate, setTaxRate] = useState<number>(18); // Default 18% GST, customizable
   const { toast } = useToast();
   const { saveData } = useOfflineStorage('pos-orders', 'pos_orders');
+
+  // Function to reload products from IndexedDB
+  const reloadProducts = async () => {
+    try {
+      const prods = await dbGetAll<ProductRec>('products');
+      setProducts(prods);
+    } catch (error) {
+      console.error('Error reloading products:', error);
+    }
+  };
 
   useEffect(() => {
     (async () => {
@@ -56,17 +78,18 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
       const sortedCats = cats.sort((a, b) => a.name.localeCompare(b.name));
       setCategories(sortedCats);
       setProducts(prods);
-      setSelectedCategory(sortedCats[0]?.id || '');
+      // Default to showing all products (no category filter)
+      setSelectedCategory('');
     })();
   }, [businessType]);
 
-  const addToCart = (name: string, price: number, category: string) => {
+  const addToCart = (name: string, price: number, category: string, productId?: string) => {
     const existingItem = cart.find(item => item.name === name);
     
     if (existingItem) {
       setCart(cart.map(item =>
         item.name === name 
-          ? { ...item, quantity: item.quantity + 1 }
+          ? { ...item, quantity: item.quantity + 1, productId: productId || item.productId }
           : item
       ));
     } else {
@@ -75,7 +98,8 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
         name,
         price,
         quantity: 1,
-        category
+        category,
+        productId
       };
       setCart([...cart, newItem]);
     }
@@ -100,12 +124,10 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
 
   const calculateTotals = () => {
     const subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-    const taxRate = 18; // 18% GST
     const tax = (subtotal * taxRate) / 100;
-    const processingFee = 1; // ₹1 flat fee
-    const total = subtotal + tax + processingFee;
+    const total = subtotal + tax;
 
-    return { subtotal, tax, processingFee, total, taxRate };
+    return { subtotal, tax, total, taxRate };
   };
 
   const handleKeypadInput = (value: string) => {
@@ -125,11 +147,39 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
     }
   };
 
+  const handlePaymentMethodSelect = (method: 'cash' | 'upi' | 'card') => {
+    setSelectedPaymentMethod(method);
+    setPaymentStatus(null);
+    if (method === 'cash') {
+      // Cash payments are immediate
+      setPaymentStatus('completed');
+    }
+  };
+
+
   const processPayment = async () => {
     if (cart.length === 0) {
       toast({
         title: "Error",
         description: "Cart is empty. Add items to proceed.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    if (!selectedPaymentMethod) {
+      toast({
+        title: "Select Payment Method",
+        description: "Please select a payment method to proceed.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    if (selectedPaymentMethod === 'upi' && paymentStatus !== 'completed') {
+      toast({
+        title: "Payment Pending",
+        description: "Please complete UPI payment first.",
         variant: "destructive"
       });
       return;
@@ -142,34 +192,108 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
       items: cart,
       customer: customerInfo,
       ...totals,
-      paymentMethod: 'offline',
+      paymentMethod: selectedPaymentMethod,
+      upiId: selectedPaymentMethod === 'upi' ? upiId : undefined,
+      paymentStatus: 'completed',
       timestamp: new Date().toISOString(),
       status: 'completed'
     };
 
     try {
+      // Save order
       await saveData(orderData);
       try { await upsertOne('orders', orderData as any); } catch {}
       
+      // Update product stock for each item in cart
+      for (const cartItem of cart) {
+        if (cartItem.productId) {
+          try {
+            // Get product from IndexedDB
+            const product = await dbGetById<any>('products', cartItem.productId);
+            if (product) {
+              // Decrease stock by quantity sold
+              const currentStock = product.stock || 0;
+              const newStock = Math.max(0, currentStock - cartItem.quantity);
+              
+              // Update product with new stock
+              const updatedProduct = {
+                ...product,
+                stock: newStock
+              };
+              
+              await dbPut('products', updatedProduct);
+            }
+          } catch (error) {
+            console.error(`Failed to update stock for product ${cartItem.productId}:`, error);
+            // Continue with other products even if one fails
+          }
+        } else {
+          // For custom items without productId, try to find by name and update stock
+          try {
+            const allProducts = await dbGetAll<any>('products');
+            const product = allProducts.find((p: any) => p.name === cartItem.name);
+            if (product && product.stock !== undefined) {
+              const currentStock = product.stock || 0;
+              const newStock = Math.max(0, currentStock - cartItem.quantity);
+              
+              const updatedProduct = {
+                ...product,
+                stock: newStock
+              };
+              
+              await dbPut('products', updatedProduct);
+            }
+          } catch (error) {
+            console.error(`Failed to update stock for custom item ${cartItem.name}:`, error);
+          }
+        }
+      }
+      
+      // Reload all products from IndexedDB to ensure UI reflects latest stock
+      await reloadProducts();
+      
+      // Dispatch custom event to notify other components about stock update
+      window.dispatchEvent(new CustomEvent('inventory-updated', { 
+        detail: { orderId: orderData.id } 
+      }));
+      
       toast({
-        title: "Order Completed",
-        description: `Order ${orderData.id} processed successfully! Total: ₹${totals.total.toFixed(2)}. Order saved locally and will sync when online.`,
+        title: "Payment Successful",
+        description: `Order ${orderData.id} completed! Total: ₹${totals.total.toFixed(2)}. Payment via ${selectedPaymentMethod.toUpperCase()}. Inventory updated.`,
       });
 
       // Reset form
       setCart([]);
       setCustomerInfo({ name: '', phone: '', email: '' });
       setShowPayment(false);
+      setSelectedPaymentMethod(null);
+      setUpiId('');
+      setPaymentStatus(null);
     } catch (error) {
       toast({
         title: "Error",
         description: "Failed to process order. Please try again.",
         variant: "destructive"
       });
+      console.error('Error processing payment:', error);
     }
   };
 
-  const { subtotal, tax, processingFee, total, taxRate } = calculateTotals();
+  const { subtotal, tax, total } = calculateTotals();
+
+  // Generate UPI payment QR code data
+  // Note: This QR code is for customers to scan and pay TO the merchant
+  const upiQRCodeData = useMemo(() => {
+    // UPI QR code format: upi://pay?pa=<UPI_ID>&pn=<Payee Name>&am=<Amount>&cu=INR&tn=<Transaction Note>
+    // This should be the MERCHANT's UPI ID where customers send payments
+    // TODO: Load from settings or business profile
+    const merchantUPI = 'merchant@paytm'; // Replace with actual merchant UPI from settings
+    const merchantName = 'RetailPro Merchant'; // Replace with actual merchant name
+    const amount = total.toFixed(2);
+    const transactionNote = `Payment for ${businessType} order`;
+    
+    return `upi://pay?pa=${encodeURIComponent(merchantUPI)}&pn=${encodeURIComponent(merchantName)}&am=${amount}&cu=INR&tn=${encodeURIComponent(transactionNote)}`;
+  }, [total, businessType]);
 
   // Keypad Component
   const Keypad = () => (
@@ -236,15 +360,23 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
 
   if (showPayment) {
     return (
-      <div className="fixed inset-0 bg-background z-50 flex flex-col">
+      <div className="fixed inset-0 bg-gradient-to-br from-background to-muted/20 z-50 flex flex-col">
         {/* Header */}
-        <div className="bg-gradient-primary text-white p-4 flex justify-between items-center">
-          <h1 className="text-xl font-bold">Payment - {businessType.charAt(0).toUpperCase() + businessType.slice(1)} POS</h1>
+        <div className="bg-gradient-primary text-white p-5 flex justify-between items-center shadow-lg border-b-4 border-primary/30">
+          <div>
+            <h1 className="text-2xl font-bold mb-1">Payment</h1>
+            <p className="text-white/80 text-sm">{businessType.charAt(0).toUpperCase() + businessType.slice(1)} POS System</p>
+          </div>
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => setShowPayment(false)}
-            className="text-white hover:bg-white/10"
+            onClick={() => {
+              setShowPayment(false);
+              setSelectedPaymentMethod(null);
+              setUpiId('');
+              setPaymentStatus(null);
+            }}
+            className="text-white hover:bg-white/10 border border-white/20"
           >
             <ArrowLeft className="h-4 w-4 mr-2" />
             Back to Cart
@@ -252,13 +384,13 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
         </div>
 
         <ScrollArea className="flex-1 p-6">
-          <div className="max-w-2xl mx-auto space-y-6">
+          <div className="max-w-3xl mx-auto space-y-4">
             {/* Customer Information */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Customer Information (Optional)</CardTitle>
+            <Card className="shadow-md border-2">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-lg">Customer Information (Optional)</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-4">
+              <CardContent className="space-y-3">
                 <Input
                   placeholder="Customer Name"
                   value={customerInfo.name}
@@ -280,62 +412,283 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
             </Card>
 
             {/* Order Summary */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Order Summary</CardTitle>
+            <Card className="shadow-md border-2">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-lg">Order Summary</CardTitle>
               </CardHeader>
               <CardContent>
-                {cart.map(item => (
-                  <div key={item.id} className="flex justify-between items-center py-2">
-                    <span>{item.name} x{item.quantity}</span>
-                    <span className="font-semibold">₹{(item.price * item.quantity).toFixed(2)}</span>
-                  </div>
-                ))}
+                <div className="space-y-2">
+                  {cart.map(item => (
+                    <div key={item.id} className="flex justify-between items-center py-2.5 border-b last:border-0">
+                      <span className="text-sm font-medium">{item.name} <span className="text-muted-foreground">x{item.quantity}</span></span>
+                      <span className="font-semibold text-primary">₹{(item.price * item.quantity).toFixed(2)}</span>
+                    </div>
+                  ))}
+                </div>
               </CardContent>
             </Card>
 
             {/* Payment Breakdown */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Payment Breakdown</CardTitle>
+            <Card className="shadow-md border-2 border-primary/20">
+              <CardHeader className="pb-3 bg-primary/5">
+                <CardTitle className="text-lg">Payment Breakdown</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-2">
-                <div className="flex justify-between">
-                  <span>Subtotal:</span>
-                  <span>₹{subtotal.toFixed(2)}</span>
+              <CardContent className="space-y-3 pt-4">
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Subtotal:</span>
+                  <span className="font-medium">₹{subtotal.toFixed(2)}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span>Tax ({taxRate}%):</span>
-                  <span>₹{tax.toFixed(2)}</span>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 flex-1">
+                    <span className="text-sm text-muted-foreground">Tax:</span>
+                    <Input
+                      type="number"
+                      value={taxRate}
+                      onChange={(e) => setTaxRate(Math.max(0, Math.min(100, parseFloat(e.target.value) || 0)))}
+                      className="w-20 h-9 text-sm font-medium"
+                      min="0"
+                      max="100"
+                      step="0.1"
+                    />
+                    <span className="text-sm text-muted-foreground">%</span>
+                  </div>
+                  <span className="font-medium">₹{tax.toFixed(2)}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span>Processing Fee:</span>
-                  <span>₹{processingFee.toFixed(2)}</span>
-                </div>
-                <Separator />
-                <div className="flex justify-between text-lg font-bold">
-                  <span>Total:</span>
-                  <span>₹{total.toFixed(2)}</span>
+                <Separator className="my-2" />
+                <div className="flex justify-between items-center pt-2 border-t-2 border-primary/30">
+                  <span className="text-lg font-bold">Total:</span>
+                  <span className="text-2xl font-bold text-primary">₹{total.toFixed(2)}</span>
                 </div>
               </CardContent>
             </Card>
 
-            <div className="bg-warning/10 border border-warning rounded-lg p-4 text-center">
-              <p className="text-warning-foreground">
+            {/* Payment Method Selection */}
+            <Card className="shadow-md border-2">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-lg">Select Payment Method</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                  {/* Cash Payment */}
+                  <Button
+                    variant={selectedPaymentMethod === 'cash' ? 'default' : 'outline'}
+                    className={`h-24 flex-col ${selectedPaymentMethod === 'cash' ? 'bg-success text-white' : ''}`}
+                    onClick={() => handlePaymentMethodSelect('cash')}
+                  >
+                    <Banknote className="h-6 w-6 mb-2" />
+                    <span className="font-semibold">Cash</span>
+                  </Button>
+
+                  {/* UPI Payment */}
+                  <Button
+                    variant={selectedPaymentMethod === 'upi' ? 'default' : 'outline'}
+                    className={`h-24 flex-col ${selectedPaymentMethod === 'upi' ? 'bg-primary text-white' : ''}`}
+                    onClick={() => handlePaymentMethodSelect('upi')}
+                  >
+                    <Smartphone className="h-6 w-6 mb-2" />
+                    <span className="font-semibold">UPI</span>
+                    <span className="text-xs mt-1">GPay/PhonePe</span>
+                  </Button>
+
+                  {/* Card Payment */}
+                  <Button
+                    variant={selectedPaymentMethod === 'card' ? 'default' : 'outline'}
+                    className={`h-24 flex-col ${selectedPaymentMethod === 'card' ? 'bg-info text-white' : ''}`}
+                    onClick={() => handlePaymentMethodSelect('card')}
+                  >
+                    <CreditCard className="h-6 w-6 mb-2" />
+                    <span className="font-semibold">Card</span>
+                    <span className="text-xs mt-1">Debit/Credit</span>
+                  </Button>
+                </div>
+
+                {/* UPI Payment Details */}
+                {selectedPaymentMethod === 'upi' && (
+                  <Card className="bg-primary/5 border-primary/20">
+                    <CardContent className="pt-6 space-y-4">
+                      <div>
+                        <label className="text-sm font-medium mb-2 block">Customer UPI ID (Optional)</label>
+                        <Input
+                          placeholder="Customer's UPI ID for payment request (optional)"
+                          value={upiId}
+                          onChange={(e) => setUpiId(e.target.value)}
+                          className="mb-2"
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Optional: Enter customer's UPI ID to send payment request. Or use QR code below for customer to scan and pay.
+                        </p>
+                      </div>
+
+                      {/* UPI QR Code Option */}
+                      <div className="border-t pt-4">
+                        <div className="flex items-center gap-2 mb-2">
+                          <QrCode className="h-4 w-4" />
+                          <span className="text-sm font-medium">Scan QR Code to Pay</span>
+                        </div>
+                        <div className="bg-white p-6 rounded-lg border-2 border-primary/20 flex flex-col items-center justify-center">
+                          <div className="bg-white p-3 rounded-lg shadow-lg mb-3">
+                            <QRCodeSVG
+                              value={upiQRCodeData}
+                              size={200}
+                              level="H"
+                              includeMargin={true}
+                              imageSettings={{
+                                src: '',
+                                height: 0,
+                                width: 0,
+                                excavate: false,
+                              }}
+                            />
+                          </div>
+                          <div className="text-center space-y-1">
+                            <p className="text-sm font-medium text-foreground">
+                              Scan with any UPI app
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Amount: <span className="font-semibold text-primary">₹{total.toFixed(2)}</span>
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-2">
+                              (GPay, PhonePe, Paytm, BHIM, etc.)
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* UPI Payment Status */}
+                      {paymentStatus && (
+                        <div className={`p-3 rounded-lg ${
+                          paymentStatus === 'completed' 
+                            ? 'bg-success/10 border border-success' 
+                            : 'bg-warning/10 border border-warning'
+                        }`}>
+                          <div className="flex items-center gap-2">
+                            {paymentStatus === 'completed' ? (
+                              <>
+                                <CheckCircle className="h-5 w-5 text-success" />
+                                <span className="text-sm font-medium text-success">
+                                  Payment Received
+                                </span>
+                              </>
+                            ) : (
+                              <>
+                                <div className="h-5 w-5 border-2 border-warning border-t-transparent rounded-full animate-spin" />
+                                <span className="text-sm font-medium text-warning">
+                                  Processing Payment...
+                                </span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Payment Confirmation Buttons */}
+                      {paymentStatus !== 'completed' && (
+                        <Button
+                          onClick={() => {
+                            setPaymentStatus('processing');
+                            toast({
+                              title: "QR Code Active",
+                              description: "Customer can scan the QR code to pay. Click 'Payment Received' after customer completes payment.",
+                            });
+                          }}
+                          className="w-full"
+                        >
+                          <Smartphone className="h-4 w-4 mr-2" />
+                          Ready for Payment
+                        </Button>
+                      )}
+                      
+                      {paymentStatus === 'processing' && (
+                        <Button
+                          onClick={() => setPaymentStatus('completed')}
+                          className="w-full bg-success hover:bg-success/90"
+                        >
+                          <CheckCircle className="h-4 w-4 mr-2" />
+                          Payment Received - Complete
+                        </Button>
+                      )}
+                      
+                      {paymentStatus === 'completed' && (
+                        <div className="w-full p-3 bg-success/10 border border-success rounded-lg flex items-center justify-center gap-2">
+                          <CheckCircle className="h-5 w-5 text-success" />
+                          <span className="text-sm font-medium text-success">
+                            Payment Confirmed ✓
+                          </span>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Card Payment Details */}
+                {selectedPaymentMethod === 'card' && (
+                  <Card className="bg-info/5 border-info/20">
+                    <CardContent className="pt-6 space-y-4">
+                      <div>
+                        <label className="text-sm font-medium mb-2 block">Card Number</label>
+                        <Input
+                          placeholder="1234 5678 9012 3456"
+                          maxLength={19}
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="text-sm font-medium mb-2 block">Expiry Date</label>
+                          <Input placeholder="MM/YY" maxLength={5} />
+                        </div>
+                        <div>
+                          <label className="text-sm font-medium mb-2 block">CVV</label>
+                          <Input placeholder="123" maxLength={4} type="password" />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-sm font-medium mb-2 block">Cardholder Name</label>
+                        <Input placeholder="Name on card" />
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Cash Payment Confirmation */}
+                {selectedPaymentMethod === 'cash' && (
+                  <Card className="bg-success/5 border-success/20">
+                    <CardContent className="pt-6">
+                      <div className="flex items-center gap-2 mb-4">
+                        <CheckCircle className="h-5 w-5 text-success" />
+                        <span className="text-sm font-medium">Cash payment - Ready to complete</span>
+                      </div>
+                      <div className="bg-white p-3 rounded-lg border">
+                        <div className="flex justify-between items-center">
+                          <span className="text-sm text-muted-foreground">Collect Amount:</span>
+                          <span className="text-lg font-bold">₹{total.toFixed(2)}</span>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+              </CardContent>
+            </Card>
+
+            <div className="bg-warning/10 border border-warning rounded-lg p-4 text-center shadow-sm">
+              <p className="text-warning-foreground text-sm font-medium">
                 📱 Offline Mode: Order will be saved locally and synced when internet returns
               </p>
             </div>
           </div>
         </ScrollArea>
 
-        <div className="p-6 border-t">
-          <Button
-            onClick={processPayment}
-            className="w-full bg-success hover:bg-success/90 text-white text-lg py-6"
-          >
-            <CreditCard className="h-5 w-5 mr-2" />
-            Process Payment - ₹{total.toFixed(2)}
-          </Button>
+        <div className="p-6 border-t bg-background/95 backdrop-blur-sm">
+          <div className="max-w-3xl mx-auto">
+            <Button
+              onClick={processPayment}
+              disabled={!selectedPaymentMethod || (selectedPaymentMethod === 'upi' && paymentStatus !== 'completed')}
+              className="w-full max-w-md mx-auto bg-success hover:bg-success/90 text-white text-lg py-6 disabled:opacity-50 shadow-lg hover:shadow-xl transition-all font-semibold"
+              size="lg"
+            >
+              <CheckCircle className="h-5 w-5 mr-2" />
+              Complete Order - ₹{total.toFixed(2)}
+            </Button>
+          </div>
         </div>
       </div>
     );
@@ -363,6 +716,13 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
           
           {/* Categories */}
           <div className="flex flex-wrap gap-2 mb-6">
+            <Button
+              variant={!selectedCategory ? "default" : "outline"}
+              size="sm"
+              onClick={() => setSelectedCategory('')}
+            >
+              All
+            </Button>
             {categories.map(category => (
               <Button
                 key={category.id}
@@ -423,24 +783,84 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
 
           {/* Items from IndexedDB */}
           <div>
-            <h3 className="text-md font-semibold mb-4">Items</h3>
-            <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-              {products.filter(p => !selectedCategory || p.category === selectedCategory).map((item) => (
-                <Card
-                  key={item.id}
-                  className="cursor-pointer hover:shadow-md transition-shadow"
-                  onClick={() => {
-                    const catName = categories.find(c => c.id === selectedCategory)?.name || 'General';
-                    addToCart(item.name, item.price, catName);
-                  }}
-                >
-                  <CardContent className="p-4 text-center">
-                    <h4 className="font-medium text-sm mb-1">{item.name}</h4>
-                    <p className="text-muted-foreground text-sm">₹{item.price}</p>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
+            <h3 className="text-md font-semibold mb-4">Items {products.length > 0 && `(${products.filter(p => !selectedCategory || p.category === selectedCategory || p.category === categories.find(c => c.id === selectedCategory)?.id).length})`}</h3>
+            {products.length === 0 ? (
+              <Card>
+                <CardContent className="p-8 text-center">
+                  <p className="text-muted-foreground mb-4">No products found. Add products from the Menu Manager.</p>
+                  <Button variant="outline" onClick={() => {
+                    toast({
+                      title: "Add Products",
+                      description: "Go to Menu Management to add products first.",
+                    });
+                  }}>
+                    Add Products
+                  </Button>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+                {products
+                  .filter(p => {
+                    // Show all products if no category selected
+                    if (!selectedCategory) return true;
+                    // Match by category ID or check if product category matches selected
+                    return p.category === selectedCategory || 
+                           p.category === categories.find(c => c.id === selectedCategory)?.id ||
+                           p.category === categories.find(c => c.id === selectedCategory)?.name;
+                  })
+                  .map((item) => {
+                    const categoryObj = categories.find(c => c.id === item.category || c.name === item.category);
+                    const catName = categoryObj?.name || item.category || 'General';
+                    
+                    return (
+                      <Card
+                        key={item.id}
+                        className="cursor-pointer hover:shadow-md transition-shadow hover:border-primary"
+                        onClick={() => {
+                          // Check if item is out of stock
+                          if (item.stock !== undefined && item.stock <= 0) {
+                            toast({
+                              title: "Out of Stock",
+                              description: `${item.name} is out of stock`,
+                              variant: "destructive"
+                            });
+                            return;
+                          }
+                          addToCart(item.name, item.price, catName, item.id);
+                          toast({
+                            title: "Added to Cart",
+                            description: `${item.name} added to cart`,
+                          });
+                        }}
+                      >
+                      <CardContent className={`p-4 text-center ${item.stock !== undefined && item.stock <= 0 ? 'opacity-60' : ''}`}>
+                        <h4 className="font-medium text-sm mb-1">{item.name}</h4>
+                        <p className="text-muted-foreground text-xs mb-1">{catName}</p>
+                        <p className="text-primary font-semibold mb-1">₹{item.price.toFixed(2)}</p>
+                        {item.stock !== undefined && (
+                          <p className={`text-xs font-medium ${item.stock === 0 ? 'text-destructive' : item.stock < 5 ? 'text-warning' : 'text-muted-foreground'}`}>
+                            {item.stock === 0 ? 'Out of Stock' : `Stock: ${item.stock}`}
+                          </p>
+                        )}
+                      </CardContent>
+                      </Card>
+                    );
+                  })}
+                {products.filter(p => {
+                  if (!selectedCategory) return true;
+                  return p.category === selectedCategory || 
+                         p.category === categories.find(c => c.id === selectedCategory)?.id ||
+                         p.category === categories.find(c => c.id === selectedCategory)?.name;
+                }).length === 0 && (
+                  <Card>
+                    <CardContent className="p-8 text-center">
+                      <p className="text-muted-foreground">No products in this category. Try another category or add products.</p>
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -518,13 +938,21 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
                     <span>Subtotal:</span>
                     <span>₹{subtotal.toFixed(2)}</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span>Tax ({taxRate}%):</span>
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-2">
+                      <span>Tax:</span>
+                      <Input
+                        type="number"
+                        value={taxRate}
+                        onChange={(e) => setTaxRate(Math.max(0, Math.min(100, parseFloat(e.target.value) || 0)))}
+                        className="w-16 h-7 text-xs"
+                        min="0"
+                        max="100"
+                        step="0.1"
+                      />
+                      <span className="text-xs">%</span>
+                    </div>
                     <span>₹{tax.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Processing Fee:</span>
-                    <span>₹{processingFee.toFixed(2)}</span>
                   </div>
                   <Separator />
                   <div className="flex justify-between font-bold text-lg">

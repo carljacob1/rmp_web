@@ -11,6 +11,7 @@ import { DateRange } from "./ReportsManager";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { formatIndianCurrency } from "@/lib/indian-tax-utils";
 import { toast } from "@/hooks/use-toast";
+import { dbGetAll, dbPut, dbDelete, forceDBUpgrade, resetDBConnection } from "@/lib/indexeddb";
 
 interface EmployeeReportsProps {
   reportType: string;
@@ -19,6 +20,8 @@ interface EmployeeReportsProps {
 
 interface Employee {
   id: string;
+  employeeId: string; // Unique employee ID for login
+  pin: string; // PIN for attendance login
   name: string;
   position: string;
   department: string;
@@ -52,7 +55,6 @@ interface EmployeeSummary {
   avgPerformance: number;
 }
 
-const EMPLOYEES_STORAGE_KEY = 'employees_data';
 const PAYROLL_STORAGE_KEY = 'payroll_data';
 
 export function EmployeeReports({ reportType, dateRange }: EmployeeReportsProps) {
@@ -60,24 +62,27 @@ export function EmployeeReports({ reportType, dateRange }: EmployeeReportsProps)
   const [payrollEntries, setPayrollEntries] = useState<PayrollEntry[]>([]);
   const [newEmployee, setNewEmployee] = useState<Partial<Employee>>({
     status: 'active',
-    performanceScore: 80
+    performanceScore: 80,
+    employeeId: '',
+    pin: ''
   });
   const [isEmployeeDialogOpen, setIsEmployeeDialogOpen] = useState(false);
-  const [offlineMode, setOfflineMode] = useState(!navigator.onLine);
+  // Default to online - app works offline-first, so assume online unless definitely offline
+  const [offlineMode, setOfflineMode] = useState(() => navigator.onLine === false);
 
-  // Load data from localStorage
+  // Load data from IndexedDB
   useEffect(() => {
-    const storedEmployees = localStorage.getItem(EMPLOYEES_STORAGE_KEY);
-    const storedPayroll = localStorage.getItem(PAYROLL_STORAGE_KEY);
-    
-    if (storedEmployees) {
+    const loadData = async () => {
       try {
-        setEmployees(JSON.parse(storedEmployees));
+        const emps = await dbGetAll<Employee>('employees');
+        setEmployees(emps || []);
       } catch (error) {
         console.error('Error loading employee data:', error);
       }
-    }
-    
+    };
+    loadData();
+
+    const storedPayroll = localStorage.getItem(PAYROLL_STORAGE_KEY);
     if (storedPayroll) {
       try {
         setPayrollEntries(JSON.parse(storedPayroll));
@@ -87,17 +92,16 @@ export function EmployeeReports({ reportType, dateRange }: EmployeeReportsProps)
     }
   }, []);
 
-  // Save data to localStorage
-  useEffect(() => {
-    localStorage.setItem(EMPLOYEES_STORAGE_KEY, JSON.stringify(employees));
-  }, [employees]);
-
+  // Save payroll to localStorage (can be moved to IndexedDB later)
   useEffect(() => {
     localStorage.setItem(PAYROLL_STORAGE_KEY, JSON.stringify(payrollEntries));
   }, [payrollEntries]);
 
-  // Monitor online status
+  // Monitor online status - optimistic approach
   useEffect(() => {
+    // Update based on navigator (default to online)
+    setOfflineMode(navigator.onLine === false);
+    
     const handleOnline = () => setOfflineMode(false);
     const handleOffline = () => setOfflineMode(true);
 
@@ -124,7 +128,7 @@ export function EmployeeReports({ reportType, dateRange }: EmployeeReportsProps)
     };
   };
 
-  const addEmployee = () => {
+  const addEmployee = async () => {
     if (!newEmployee.name || !newEmployee.position || !newEmployee.department || !newEmployee.salary) {
       toast({
         title: "Error",
@@ -134,8 +138,14 @@ export function EmployeeReports({ reportType, dateRange }: EmployeeReportsProps)
       return;
     }
 
+    // Generate employee ID if not provided
+    const employeeId = newEmployee.employeeId || `EMP${Date.now().toString().slice(-6)}`;
+    const pin = newEmployee.pin || Math.floor(1000 + Math.random() * 9000).toString(); // 4-digit PIN
+
     const employee: Employee = {
-      id: Date.now().toString(),
+      id: `emp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      employeeId,
+      pin,
       name: newEmployee.name!,
       position: newEmployee.position!,
       department: newEmployee.department!,
@@ -147,14 +157,65 @@ export function EmployeeReports({ reportType, dateRange }: EmployeeReportsProps)
       performanceScore: newEmployee.performanceScore || 80
     };
 
-    setEmployees(prev => [...prev, employee]);
-    setNewEmployee({ status: 'active', performanceScore: 80 });
-    setIsEmployeeDialogOpen(false);
-    
-    toast({
-      title: "Success",
-      description: "Employee added successfully",
-    });
+    try {
+      await dbPut('employees', employee);
+      const emps = await dbGetAll<Employee>('employees');
+      setEmployees(emps || []);
+      setNewEmployee({ status: 'active', performanceScore: 80, employeeId: '', pin: '' });
+      setIsEmployeeDialogOpen(false);
+      
+      toast({
+        title: "Success",
+        description: `Employee added successfully. Employee ID: ${employeeId}, PIN: ${pin}`,
+      });
+    } catch (error: any) {
+      console.error('Error adding employee:', error);
+      let errorMessage = "Failed to add employee";
+      
+      // Check if it's a missing store error
+      if (error?.message?.includes("object stores was not found") || 
+          error?.message?.includes("does not exist") ||
+          error?.message?.includes("not found")) {
+        
+        // Try to force database upgrade
+        try {
+          toast({
+            title: "Upgrading Database",
+            description: "Upgrading database structure... Please wait.",
+          });
+          
+          await forceDBUpgrade();
+          resetDBConnection();
+          
+          // Retry after upgrade
+          await new Promise(resolve => setTimeout(resolve, 1000)); // Wait a bit
+          await dbPut('employees', employee);
+          const emps = await dbGetAll<Employee>('employees');
+          setEmployees(emps || []);
+          setNewEmployee({ status: 'active', performanceScore: 80, employeeId: '', pin: '' });
+          setIsEmployeeDialogOpen(false);
+          
+          toast({
+            title: "Success",
+            description: `Employee added successfully. Employee ID: ${employeeId}, PIN: ${pin}`,
+          });
+          return; // Success, exit early
+        } catch (upgradeError) {
+          console.error('Error during database upgrade:', upgradeError);
+          errorMessage = "Database upgrade failed. Please refresh the page and try again.";
+        }
+      }
+      
+      if (errorMessage === "Failed to add employee") {
+        errorMessage = error?.message || "Failed to add employee. Please try again.";
+      }
+      
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    }
   };
 
   const generatePayroll = () => {
@@ -325,6 +386,9 @@ export function EmployeeReports({ reportType, dateRange }: EmployeeReportsProps)
           <DialogContent className="max-w-md">
             <DialogHeader>
               <DialogTitle>Add Employee</DialogTitle>
+              <p className="text-sm text-muted-foreground">
+                Fill in the employee details below. Employee ID and PIN will be auto-generated if left empty.
+              </p>
             </DialogHeader>
             <div className="space-y-4">
               <div>
@@ -334,6 +398,27 @@ export function EmployeeReports({ reportType, dateRange }: EmployeeReportsProps)
                   value={newEmployee.name || ''}
                   onChange={(e) => setNewEmployee(prev => ({ ...prev, name: e.target.value }))}
                   placeholder="Enter full name"
+                  required
+                />
+              </div>
+              <div>
+                <Label htmlFor="employeeId">Employee ID (Auto-generated if empty)</Label>
+                <Input
+                  id="employeeId"
+                  value={newEmployee.employeeId || ''}
+                  onChange={(e) => setNewEmployee(prev => ({ ...prev, employeeId: e.target.value }))}
+                  placeholder="EMP001 or leave empty for auto-generation"
+                />
+              </div>
+              <div>
+                <Label htmlFor="pin">PIN (4 digits, Auto-generated if empty)</Label>
+                <Input
+                  id="pin"
+                  type="password"
+                  maxLength={4}
+                  value={newEmployee.pin || ''}
+                  onChange={(e) => setNewEmployee(prev => ({ ...prev, pin: e.target.value.replace(/\D/g, '') }))}
+                  placeholder="1234 or leave empty for auto-generation"
                 />
               </div>
               <div>
@@ -343,6 +428,7 @@ export function EmployeeReports({ reportType, dateRange }: EmployeeReportsProps)
                   value={newEmployee.position || ''}
                   onChange={(e) => setNewEmployee(prev => ({ ...prev, position: e.target.value }))}
                   placeholder="e.g., Software Engineer"
+                  required
                 />
               </div>
               <div>
@@ -352,6 +438,7 @@ export function EmployeeReports({ reportType, dateRange }: EmployeeReportsProps)
                   value={newEmployee.department || ''}
                   onChange={(e) => setNewEmployee(prev => ({ ...prev, department: e.target.value }))}
                   placeholder="e.g., IT, HR, Sales"
+                  required
                 />
               </div>
               <div>
@@ -362,6 +449,7 @@ export function EmployeeReports({ reportType, dateRange }: EmployeeReportsProps)
                   value={newEmployee.salary || ''}
                   onChange={(e) => setNewEmployee(prev => ({ ...prev, salary: parseFloat(e.target.value) }))}
                   placeholder="0.00"
+                  required
                 />
               </div>
               <div>
@@ -391,6 +479,7 @@ export function EmployeeReports({ reportType, dateRange }: EmployeeReportsProps)
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead>Employee ID</TableHead>
                   <TableHead>Name</TableHead>
                   <TableHead>Position</TableHead>
                   <TableHead>Department</TableHead>
@@ -401,6 +490,7 @@ export function EmployeeReports({ reportType, dateRange }: EmployeeReportsProps)
               <TableBody>
                 {employees.map((employee) => (
                   <TableRow key={employee.id}>
+                    <TableCell className="font-mono font-semibold">{employee.employeeId}</TableCell>
                     <TableCell className="font-medium">{employee.name}</TableCell>
                     <TableCell>{employee.position}</TableCell>
                     <TableCell>{employee.department}</TableCell>
