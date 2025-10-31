@@ -5,10 +5,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { useEffect } from "react";
 import { migrateLocalStorageToIndexedDB, resetDBConnection, forceDBUpgrade } from "@/lib/indexeddb";
+import { initializeSync, setupOnlineSyncListener, stopPeriodicSync } from "@/lib/syncService";
  
 import Landing from "./pages/Landing";
 import Pricing from "./pages/Pricing";
-import Register from "./pages/Register";
+import Contact from "./pages/Register";
 import { Login } from "./components/auth/Login";
 import AppPage from "./pages/AppPage";
 import { AttendancePage } from "./pages/AttendancePage";
@@ -40,11 +41,33 @@ const App = () => {
       }
     };
     
-    ensureDBUpgrade();
+    let cleanupSync: (() => void) | undefined;
     
-    // One-time migration from localStorage to IndexedDB
-    migrateLocalStorageToIndexedDB();
+    const setupSync = async () => {
+      try {
+        // Wait for DB upgrade to complete
+        await ensureDBUpgrade();
+        
+        // One-time migration from localStorage to IndexedDB
+        await migrateLocalStorageToIndexedDB();
+        
+        // Initialize sync service (will sync when online)
+        await initializeSync();
+        
+        // Setup online/offline listeners for auto-sync
+        cleanupSync = setupOnlineSyncListener();
+      } catch (error) {
+        console.error('Error setting up sync:', error);
+      }
+    };
     
+    setupSync();
+    
+    // Cleanup on unmount
+    return () => {
+      if (cleanupSync) cleanupSync();
+      stopPeriodicSync();
+    };
   }, []);
 
   return (
@@ -56,7 +79,8 @@ const App = () => {
           <Routes>
             <Route path="/" element={<Landing />} />
             <Route path="/pricing" element={<Pricing />} />
-            <Route path="/register" element={<Register />} />
+            <Route path="/contact" element={<Contact />} />
+            <Route path="/register" element={<Contact />} />
             <Route path="/login" element={<Login />} />
             <Route path="/app" element={<AppPage />} />
             <Route path="/attendance" element={<AttendancePage />} />

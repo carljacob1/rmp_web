@@ -120,14 +120,14 @@ const Pricing = () => {
                   </div>
 
                   <Button
-                    onClick={() => navigate('/register')}
+                    onClick={() => navigate('/contact')}
                     className={`w-full ${
                       plan.recommended 
                         ? 'bg-orange-500 hover:bg-orange-600' 
                         : 'bg-gray-700 hover:bg-gray-600'
                     } text-white`}
                   >
-                    Choose Plan
+                    Contact Us
                   </Button>
                 </CardContent>
               </Card>

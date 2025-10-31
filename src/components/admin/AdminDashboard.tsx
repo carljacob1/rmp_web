@@ -21,6 +21,9 @@ import {
 } from "lucide-react";
 import { formatIndianCurrency } from "@/lib/indian-tax-utils";
 import { toast } from "@/hooks/use-toast";
+import { triggerSync, getSyncStatus } from "@/lib/syncService";
+import { getSyncQueue } from "@/lib/syncManager";
+import { SyncStatus } from "@/components/common/SyncStatus";
 
 interface AdminDashboardProps {
   onLogout: () => void;
@@ -100,23 +103,29 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
   const handleSync = async () => {
     setIsSyncing(true);
     try {
-      // Simulate sync process
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      const result = await triggerSync();
       
-      localStorage.setItem('last_sync', new Date().toISOString());
-      setStats(prev => ({
-        ...prev,
-        lastSync: new Date().toLocaleString('en-IN')
-      }));
-      
-      toast({
-        title: "Sync Complete",
-        description: "All offline data has been synchronized",
-      });
+      if (result.success) {
+        const syncStatus = await getSyncStatus();
+        setStats(prev => ({
+          ...prev,
+          lastSync: syncStatus.lastSyncTime 
+            ? new Date(syncStatus.lastSyncTime).toLocaleString('en-IN')
+            : 'Never'
+        }));
+        
+        toast({
+          title: "Sync Complete",
+          description: "All offline data has been synchronized",
+        });
+        await loadSystemStats();
+      } else {
+        throw new Error(result.error || 'Sync failed');
+      }
     } catch (error) {
       toast({
         title: "Sync Failed",
-        description: "Unable to sync data. Will retry automatically.",
+        description: error instanceof Error ? error.message : "Unable to sync data. Will retry automatically.",
         variant: "destructive",
       });
     } finally {
@@ -290,6 +299,7 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
                   </div>
                   
                   <div className="space-y-4">
+                    <SyncStatus compact />
                     <Button onClick={exportAllData} className="w-full">
                       <Download className="h-4 w-4 mr-2" />
                       Export All Data

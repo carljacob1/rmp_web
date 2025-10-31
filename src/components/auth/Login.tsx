@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import { User, Lock, ArrowRight, Store } from "lucide-react";
+import { User, Lock, ArrowRight, Store, Smartphone } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { BusinessType } from "@/components/BusinessSelector";
 import { dbGetAll, setCurrentUser } from "@/lib/indexeddb";
@@ -74,7 +74,7 @@ export function Login({ onLogin }: LoginProps) {
     // If no user found, show error
     toast({
       title: "Error",
-      description: "Invalid credentials. Please check your mobile number/email and password, or register a new account.",
+      description: "Invalid credentials. Please check your mobile number/email and password. Sign up is available only through our mobile app.",
       variant: "destructive",
     });
   };
@@ -169,15 +169,45 @@ export function Login({ onLogin }: LoginProps) {
                 <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
 
-              <div className="text-center pt-4">
+              <div className="text-center pt-4 space-y-3">
+                <div className="bg-orange-500/10 border border-orange-500/50 rounded-lg p-4">
+                  <div className="flex items-start space-x-3">
+                    <Smartphone className="h-5 w-5 text-orange-500 flex-shrink-0 mt-0.5" />
+                    <div className="text-left">
+                      <p className="text-white text-sm font-semibold mb-1">
+                        New to RetailPro?
+                      </p>
+                      <p className="text-gray-300 text-xs mb-2">
+                        Sign up is only available through our mobile app. Download from:
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => window.open('https://play.google.com/store', '_blank')}
+                          className="text-orange-500 hover:text-orange-400 text-xs font-semibold"
+                        >
+                          Google Play
+                        </button>
+                        <span className="text-gray-500 text-xs">|</span>
+                        <button
+                          type="button"
+                          onClick={() => window.open('https://www.apple.com/app-store', '_blank')}
+                          className="text-orange-500 hover:text-orange-400 text-xs font-semibold"
+                        >
+                          App Store
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
                 <p className="text-gray-400 text-sm">
-                  Don't have an account?{" "}
+                  Need help?{" "}
                   <button
                     type="button"
-                    onClick={() => navigate('/register')}
+                    onClick={() => navigate('/contact')}
                     className="text-orange-500 hover:text-orange-400 font-semibold"
                   >
-                    Register Now
+                    Contact Us
                   </button>
                 </p>
               </div>

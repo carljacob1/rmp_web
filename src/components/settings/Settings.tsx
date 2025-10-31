@@ -3,9 +3,11 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Shield, Settings as SettingsIcon, Bell } from "lucide-react";
+import { Shield, Settings as SettingsIcon, Bell, Wifi } from "lucide-react";
 import { AdminLogin } from "@/components/admin/AdminLogin";
 import { AdminDashboard } from "@/components/admin/AdminDashboard";
+import { NetworkStatus } from "@/components/common/NetworkStatus";
+import { SyncStatus } from "@/components/common/SyncStatus";
 
 interface SettingsProps {
   onBack: () => void;
@@ -63,6 +65,10 @@ export function Settings({ onBack, businessType = "retail" }: SettingsProps) {
           <TabsTrigger value="notifications">
             <Bell className="h-4 w-4 mr-2" />
             Notifications
+          </TabsTrigger>
+          <TabsTrigger value="network">
+            <Wifi className="h-4 w-4 mr-2" />
+            Network & Sync
           </TabsTrigger>
         </TabsList>
 
@@ -152,6 +158,11 @@ export function Settings({ onBack, businessType = "retail" }: SettingsProps) {
               </div>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="network" className="space-y-4">
+          <NetworkStatus />
+          <SyncStatus />
         </TabsContent>
       </Tabs>
     </div>
