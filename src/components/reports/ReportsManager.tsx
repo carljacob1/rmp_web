@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { FileText, Download, Calendar, TrendingUp, BarChart3, PieChart, Calculator, Users, Fuel } from "lucide-react";
+import { FileText, Download, Calendar, TrendingUp, BarChart3, PieChart, Calculator, Users, Fuel, AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -62,45 +62,79 @@ const reportTypes = {
 };
 
 export function ReportsManager({ businessType }: ReportsManagerProps) {
-  const [selectedReport, setSelectedReport] = useState(reportTypes[businessType][0].id);
+  // Safely get reports for business type with fallback
+  const currentReports = reportTypes[businessType] || reportTypes.retail;
+  
+  // Safely get first report ID with fallback
+  const defaultReportId = currentReports && currentReports.length > 0 
+    ? currentReports[0].id 
+    : 'sales';
+  
+  const [selectedReport, setSelectedReport] = useState(defaultReportId);
   const [dateRange, setDateRange] = useState<DateRange>("month");
 
-  const currentReports = reportTypes[businessType];
-
   const renderReports = () => {
-    // Handle tax and employee reports for all business types
-    if (selectedReport === "tax") {
-      return <TaxReports reportType={selectedReport} dateRange={dateRange} />;
-    }
-    if (selectedReport === "employee") {
-      return <EmployeeReports reportType={selectedReport} dateRange={dateRange} />;
-    }
+    try {
+      console.log('[ReportsManager] Rendering report:', { selectedReport, businessType, dateRange });
+      
+      // Handle tax and employee reports for all business types
+      if (selectedReport === "tax") {
+        return <TaxReports reportType={selectedReport} dateRange={dateRange} />;
+      }
+      if (selectedReport === "employee") {
+        return <EmployeeReports reportType={selectedReport} dateRange={dateRange} />;
+      }
 
-    // Handle business-specific reports
-    switch (businessType) {
-      case "retail":
-        return <RetailReports reportType={selectedReport} dateRange={dateRange} />;
-      case "service":
-        return <ServiceReports reportType={selectedReport} dateRange={dateRange} />;
-      case "restaurant":
-        return <RestaurantReports reportType={selectedReport} dateRange={dateRange} />;
-      case "healthcare":
-        return <RetailReports reportType={selectedReport} dateRange={dateRange} />; // Reuse retail reports for now
-      case "refilling":
-        return <div className="p-8 text-center">
-          <div className="flex items-center justify-center mb-4">
-            <Fuel className="h-12 w-12 text-primary" />
-          </div>
-          <h3 className="text-lg font-semibold mb-2">Refilling Reports</h3>
-          <p className="text-muted-foreground mb-4">
-            Detailed reports for {selectedReport} are coming soon. Use the main dashboard for vessel tracking.
-          </p>
-          <p className="text-sm text-muted-foreground">
-            Currently showing tax and employee reports for gas refilling business.
-          </p>
-        </div>;
-      default:
-        return null;
+      // Handle business-specific reports
+      // Normalize businessType to ensure it's valid
+      const normalizedBusinessType = businessType || "retail";
+      console.log('[ReportsManager] Normalized businessType:', normalizedBusinessType);
+      
+      switch (normalizedBusinessType) {
+        case "retail":
+          return <RetailReports reportType={selectedReport} dateRange={dateRange} />;
+        case "service":
+          return <ServiceReports reportType={selectedReport} dateRange={dateRange} />;
+        case "restaurant":
+          return <RestaurantReports reportType={selectedReport} dateRange={dateRange} />;
+        case "healthcare":
+          return <RetailReports reportType={selectedReport} dateRange={dateRange} />; // Reuse retail reports for now
+        case "refilling":
+          return <div className="p-8 text-center">
+            <div className="flex items-center justify-center mb-4">
+              <Fuel className="h-12 w-12 text-primary" />
+            </div>
+            <h3 className="text-lg font-semibold mb-2">Refilling Reports</h3>
+            <p className="text-muted-foreground mb-4">
+              Detailed reports for {selectedReport} are coming soon. Use the main dashboard for vessel tracking.
+            </p>
+            <p className="text-sm text-muted-foreground">
+              Currently showing tax and employee reports for gas refilling business.
+            </p>
+          </div>;
+        default:
+          // Fallback to retail reports if businessType doesn't match
+          console.warn(`[ReportsManager] Unknown businessType: ${businessType}, defaulting to retail`);
+          return <RetailReports reportType={selectedReport} dateRange={dateRange} />;
+      }
+    } catch (error) {
+      console.error('[ReportsManager] Error rendering reports:', error);
+      return (
+        <Card>
+          <CardContent className="p-8 text-center">
+            <div className="text-destructive mb-4">
+              <AlertTriangle className="h-12 w-12 mx-auto mb-2" />
+              <h3 className="text-lg font-semibold">Error Loading Report</h3>
+              <p className="text-sm text-muted-foreground mt-2">
+                {error instanceof Error ? error.message : 'An unexpected error occurred'}
+              </p>
+            </div>
+            <Button onClick={() => window.location.reload()} variant="outline">
+              Reload Page
+            </Button>
+          </CardContent>
+        </Card>
+      );
     }
   };
 

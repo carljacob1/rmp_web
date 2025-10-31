@@ -63,16 +63,51 @@ export function RetailReports({ reportType, dateRange }: RetailReportsProps) {
     };
   }, []);
 
+  // Helper function to get date range from string
+  const getDateRange = (range: DateRange): { start: Date; end: Date } => {
+    const now = new Date();
+    const start = new Date();
+
+    switch (range) {
+      case 'today':
+        start.setHours(0, 0, 0, 0);
+        break;
+      case 'week':
+        start.setDate(now.getDate() - 7);
+        start.setHours(0, 0, 0, 0);
+        break;
+      case 'month':
+        start.setMonth(now.getMonth() - 1);
+        start.setHours(0, 0, 0, 0);
+        break;
+      case 'quarter':
+        start.setMonth(now.getMonth() - 3);
+        start.setHours(0, 0, 0, 0);
+        break;
+      case 'year':
+        start.setFullYear(now.getFullYear() - 1);
+        start.setHours(0, 0, 0, 0);
+        break;
+      default:
+        start.setMonth(now.getMonth() - 1);
+        start.setHours(0, 0, 0, 0);
+    }
+
+    const end = new Date(now);
+    end.setHours(23, 59, 59, 999);
+
+    return { start, end };
+  };
+
   // Calculate sales metrics from real orders
   const salesData = useMemo(() => {
     // Filter orders by date range if specified
-    let filteredOrders = orders;
-    if (dateRange.start && dateRange.end) {
-      filteredOrders = orders.filter(order => {
-        const orderDate = order.timestamp ? new Date(order.timestamp) : new Date();
-        return orderDate >= dateRange.start! && orderDate <= dateRange.end!;
-      });
-    }
+    const { start: periodStart, end: periodEnd } = getDateRange(dateRange);
+    const filteredOrders = orders.filter(order => {
+      if (!order.timestamp) return false;
+      const orderDate = new Date(order.timestamp);
+      return orderDate >= periodStart && orderDate <= periodEnd;
+    });
 
     const completedOrders = filteredOrders.filter(o => !o.status || o.status === 'completed');
     const totalSales = completedOrders.reduce((sum, order) => sum + (order.total || 0), 0);
@@ -103,9 +138,6 @@ export function RetailReports({ reportType, dateRange }: RetailReportsProps) {
     // Calculate growth (compare this period to previous period of same length)
     let salesGrowth = 0;
     if (filteredOrders.length > 0) {
-      const now = new Date();
-      const periodStart = dateRange.start || new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-      const periodEnd = dateRange.end || now;
       const periodDays = (periodEnd.getTime() - periodStart.getTime()) / (1000 * 60 * 60 * 24) || 30;
       
       // Previous period (same length, before current period)
