@@ -152,6 +152,8 @@ export function Login({ onLogin }: LoginProps) {
             };
             
             await setCurrentUser(userData);
+            // Also save to localStorage for immediate access
+            localStorage.setItem('currentUser', JSON.stringify(userData));
             
             const userBusinessType = userData.businessType || userData.businessid || 'retail';
             
@@ -240,6 +242,8 @@ export function Login({ onLogin }: LoginProps) {
           };
           
           await setCurrentUser(userData);
+          // Also save to localStorage for immediate access
+          localStorage.setItem('currentUser', JSON.stringify(userData));
           
           const userBusinessType = foundUser.businessType || foundUser.businesstype || foundUser.businessid || 'retail';
           
@@ -273,6 +277,8 @@ export function Login({ onLogin }: LoginProps) {
       } else {
         // Supabase login was successful
         await setCurrentUser(userData);
+        // Also save to localStorage for immediate access
+        localStorage.setItem('currentUser', JSON.stringify(userData));
 
         const userBusinessType = userData?.businesstype || userData?.businessType || userData?.businessid || 'retail';
 

@@ -2,7 +2,7 @@
 // Stores: users, currentUser, registrations, appointments, services, medicines, invoices, expenses, orders, products, settings
 
 const DB_NAME = 'RetailProDB';
-const DB_VERSION = 5; // Incremented to add syncQueue store
+const DB_VERSION = 7; // Incremented to add payments store
 
 export type StoreName =
   | 'users'
@@ -19,7 +19,10 @@ export type StoreName =
   | 'settings'
   | 'employees'
   | 'attendance'
-  | 'syncQueue';
+  | 'syncQueue'
+  | 'locations'
+  | 'subscriptions'
+  | 'payments';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -72,7 +75,10 @@ function openDB(): Promise<IDBDatabase> {
         'settings',
         'employees',
         'attendance',
-        'syncQueue'
+        'syncQueue',
+        'locations',
+        'subscriptions',
+        'payments'
       ];
       stores.forEach((name) => {
         if (!db.objectStoreNames.contains(name)) {
@@ -106,7 +112,10 @@ function openDB(): Promise<IDBDatabase> {
         'settings',
         'employees',
         'attendance',
-        'syncQueue'
+        'syncQueue',
+        'locations',
+        'subscriptions',
+        'payments'
       ];
       
       const missing = requiredStores.filter(name => !db.objectStoreNames.contains(name));

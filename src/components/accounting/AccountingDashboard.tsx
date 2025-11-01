@@ -24,6 +24,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { dbGetAll, dbPut } from "@/lib/indexeddb";
 import { QRCodeSVG } from "qrcode.react";
+import { getCurrentUserId, filterByUserId } from "@/lib/userUtils";
 
 interface Invoice {
   id: string;
@@ -77,12 +78,16 @@ export function AccountingDashboard() {
   // Load data from IndexedDB
   useEffect(() => {
     (async () => {
+      const userId = await getCurrentUserId();
       const [inv, exp] = await Promise.all([
         dbGetAll<Invoice>('invoices'),
         dbGetAll<Expense>('expenses')
       ]);
-      setInvoices(inv);
-      setExpenses(exp);
+      // Filter by userId
+      const userInvoices = userId ? filterByUserId(inv, userId) : inv;
+      const userExpenses = userId ? filterByUserId(exp, userId) : exp;
+      setInvoices(userInvoices);
+      setExpenses(userExpenses);
     })();
   }, []);
 
@@ -301,8 +306,18 @@ function InvoicesTab({
     return (
       <InvoiceForm 
         onSave={async (invoice) => {
-          await dbPut('invoices', invoice);
-          setInvoices(prev => [...prev, invoice]);
+          const userId = await getCurrentUserId();
+          if (!userId) {
+            toast({
+              title: "Error",
+              description: "Please log in to save invoices",
+              variant: "destructive"
+            });
+            return;
+          }
+          const invoiceWithUserId = { ...invoice, userId };
+          await dbPut('invoices', invoiceWithUserId);
+          setInvoices(prev => [...prev, invoiceWithUserId]);
           setShowInvoiceForm(false);
         }}
         onCancel={() => setShowInvoiceForm(false)}
@@ -402,8 +417,18 @@ function ExpensesTab({
     return (
       <ExpenseForm 
         onSave={async (expense) => {
-          await dbPut('expenses', expense);
-          setExpenses(prev => [...prev, expense]);
+          const userId = await getCurrentUserId();
+          if (!userId) {
+            toast({
+              title: "Error",
+              description: "Please log in to save expenses",
+              variant: "destructive"
+            });
+            return;
+          }
+          const expenseWithUserId = { ...expense, userId };
+          await dbPut('expenses', expenseWithUserId);
+          setExpenses(prev => [...prev, expenseWithUserId]);
           setShowExpenseForm(false);
         }}
         onCancel={() => setShowExpenseForm(false)}

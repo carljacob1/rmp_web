@@ -9,9 +9,11 @@ import { RefillingDashboard } from "@/components/refilling/RefillingDashboard";
 import { ReportsManager } from "@/components/reports/ReportsManager";
 import { AccountingDashboard } from "@/components/accounting/AccountingDashboard";
 import { Button } from "@/components/ui/button";
-import { BarChart3, Calculator, LogOut, Store, Calendar, UtensilsCrossed, Heart, Fuel, UserCheck, Settings } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { BarChart3, Calculator, LogOut, Store, Calendar, UtensilsCrossed, Heart, Fuel, UserCheck, Settings, CreditCard } from "lucide-react";
 import { Settings as SettingsComponent } from "@/components/settings/Settings";
-import { getCurrentUser } from "@/lib/indexeddb";
+import { SubscriptionManager } from "@/components/subscription/SubscriptionManager";
+import { getCurrentUser, setCurrentUser as setIndexedDBCurrentUser } from "@/lib/indexeddb";
 
 const AppPage = () => {
   const navigate = useNavigate();
@@ -30,9 +32,9 @@ const AppPage = () => {
   const [hasMultipleLocations, setHasMultipleLocations] = useState(false);
   
   // Load saved view from localStorage, default to "dashboard"
-  const [currentView, setCurrentView] = useState<"dashboard" | "reports" | "accounting" | "settings">(() => {
+  const [currentView, setCurrentView] = useState<"dashboard" | "reports" | "accounting" | "settings" | "subscription">(() => {
     const saved = localStorage.getItem("currentView");
-    return (saved as "dashboard" | "reports" | "accounting" | "settings") || "dashboard";
+    return (saved as "dashboard" | "reports" | "accounting" | "settings" | "subscription") || "dashboard";
   });
 
   // Load user from localStorage, IndexedDB, or location state
@@ -65,10 +67,13 @@ const AppPage = () => {
         // Finally check IndexedDB
         const indexedUser = await getCurrentUser();
         if (indexedUser) {
-          setCurrentUser(indexedUser);
-          setUserBusinessType(indexedUser.businessType);
+          // Remove the 'current' key (it's just the IndexedDB key, not user data)
+          const userData = { ...indexedUser };
+          delete userData.id; // Remove 'current' key
+          setCurrentUser(userData);
+          setUserBusinessType(userData.businessType);
           // Also save to localStorage for compatibility
-          localStorage.setItem("currentUser", JSON.stringify(indexedUser));
+          localStorage.setItem("currentUser", JSON.stringify(userData));
         }
       } catch (error) {
         console.error('Error loading user:', error);
@@ -132,13 +137,18 @@ const AppPage = () => {
     if (currentView === "settings") {
       return <SettingsComponent onBack={() => setCurrentView("dashboard")} businessType={selectedBusiness} />;
     }
+    if (currentView === "subscription") {
+      return <SubscriptionManager />;
+    }
     return renderDashboard();
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     localStorage.removeItem("currentUser");
+    // Clear IndexedDB currentUser
+    await setIndexedDBCurrentUser(null);
+    // Clear React state
     setCurrentUser(null);
-    setIsLoggedIn(false);
     navigate("/");
   };
 
@@ -162,65 +172,115 @@ const AppPage = () => {
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
-      <div className="bg-gradient-primary text-white p-6 shadow-business">
-        <div className="max-w-7xl mx-auto flex justify-between items-center">
-          <div>
-            <h1 className="text-3xl font-bold mb-2">Business Management System</h1>
-            <p className="text-white/90">
-              Welcome, {currentUser.ownerName || currentUser.username} • {currentUser.businessId || "No Business ID"}
-            </p>
-          </div>
-          
-          {/* Navigation Buttons */}
-          <div className="flex space-x-2">
-            <Button
-              variant="outline"
-              className="bg-white/10 hover:bg-white/20 border-white/20 text-white"
-              onClick={() => navigate('/attendance')}
-            >
-              <UserCheck className="h-4 w-4 mr-2" />
-              Employee Attendance
-            </Button>
-            <Button
-              variant={currentView === "dashboard" ? "secondary" : "ghost"}
-              onClick={() => setCurrentView("dashboard")}
-              className={currentView === "dashboard" ? "" : "text-white hover:bg-white/10"}
-            >
-              <BarChart3 className="h-4 w-4 mr-2" />
-              Dashboard
-            </Button>
-            <Button
-              variant={currentView === "reports" ? "secondary" : "ghost"}
-              onClick={() => setCurrentView("reports")}
-              className={currentView === "reports" ? "" : "text-white hover:bg-white/10"}
-            >
-              <BarChart3 className="h-4 w-4 mr-2" />
-              Reports
-            </Button>
-            <Button
-              variant={currentView === "accounting" ? "secondary" : "ghost"}
-              onClick={() => setCurrentView("accounting")}
-              className={currentView === "accounting" ? "" : "text-white hover:bg-white/10"}
-            >
-              <Calculator className="h-4 w-4 mr-2" />
-              Accounting
-            </Button>
-            <Button
-              variant={currentView === "settings" ? "secondary" : "ghost"}
-              onClick={() => setCurrentView("settings")}
-              className={currentView === "settings" ? "" : "text-white hover:bg-white/10"}
-            >
-              <Settings className="h-4 w-4 mr-2" />
-              Settings
-            </Button>
-            <Button
-              variant="ghost"
-              onClick={handleLogout}
-              className="text-white hover:bg-white/10"
-            >
-              <LogOut className="h-4 w-4 mr-2" />
-              Logout
-            </Button>
+      <div className="bg-gradient-to-r from-blue-600 via-blue-700 to-indigo-700 text-white shadow-md border-b border-blue-800/30">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex flex-col sm:flex-row justify-between items-center py-3 gap-3">
+            {/* Left Section - Branding & User Info */}
+            <div className="flex items-center gap-3 flex-1 min-w-0">
+              <div className="w-8 h-8 bg-white/20 backdrop-blur-sm rounded-lg flex items-center justify-center border border-white/30 flex-shrink-0">
+                <Store className="h-4 w-4 text-white" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h1 className="text-lg sm:text-xl font-bold tracking-tight truncate">Business Management</h1>
+                <div className="flex items-center gap-2 text-xs sm:text-sm mt-0.5">
+                  <span className="text-white/90 truncate">
+                    {currentUser.ownerName || currentUser.username || "User"}
+                  </span>
+                  <span className="text-white/40">•</span>
+                  <Badge variant="secondary" className="bg-white/20 text-white border-white/30 px-1.5 py-0 font-mono text-[10px] sm:text-xs">
+                    {currentUser.businessId || "No ID"}
+                  </Badge>
+                </div>
+              </div>
+            </div>
+            
+            {/* Navigation Buttons */}
+            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 text-white hover:bg-white/15 border border-transparent hover:border-white/20 rounded-md px-2 sm:px-3 transition-all duration-200 text-xs sm:text-sm"
+                onClick={() => navigate('/attendance')}
+              >
+                <UserCheck className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-1" />
+                <span className="hidden sm:inline">Attendance</span>
+              </Button>
+              <Button
+                variant={currentView === "dashboard" ? "default" : "ghost"}
+                size="sm"
+                className={`h-8 rounded-md px-2 sm:px-3 transition-all duration-200 text-xs sm:text-sm ${
+                  currentView === "dashboard" 
+                    ? "bg-white text-blue-700 hover:bg-white/90 shadow-md font-semibold" 
+                    : "text-white hover:bg-white/15 border border-transparent hover:border-white/20"
+                }`}
+                onClick={() => setCurrentView("dashboard")}
+              >
+                <BarChart3 className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-1" />
+                <span className="hidden sm:inline">Dashboard</span>
+              </Button>
+              <Button
+                variant={currentView === "reports" ? "default" : "ghost"}
+                size="sm"
+                className={`h-8 rounded-md px-2 sm:px-3 transition-all duration-200 text-xs sm:text-sm ${
+                  currentView === "reports" 
+                    ? "bg-white text-blue-700 hover:bg-white/90 shadow-md font-semibold" 
+                    : "text-white hover:bg-white/15 border border-transparent hover:border-white/20"
+                }`}
+                onClick={() => setCurrentView("reports")}
+              >
+                <BarChart3 className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-1" />
+                <span className="hidden sm:inline">Reports</span>
+              </Button>
+              <Button
+                variant={currentView === "accounting" ? "default" : "ghost"}
+                size="sm"
+                className={`h-8 rounded-md px-2 sm:px-3 transition-all duration-200 text-xs sm:text-sm ${
+                  currentView === "accounting" 
+                    ? "bg-white text-blue-700 hover:bg-white/90 shadow-md font-semibold" 
+                    : "text-white hover:bg-white/15 border border-transparent hover:border-white/20"
+                }`}
+                onClick={() => setCurrentView("accounting")}
+              >
+                <Calculator className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-1" />
+                <span className="hidden sm:inline">Accounting</span>
+              </Button>
+              <Button
+                variant={currentView === "subscription" ? "default" : "ghost"}
+                size="sm"
+                className={`h-8 rounded-md px-2 sm:px-3 transition-all duration-200 text-xs sm:text-sm ${
+                  currentView === "subscription" 
+                    ? "bg-white text-blue-700 hover:bg-white/90 shadow-md font-semibold" 
+                    : "text-white hover:bg-white/15 border border-transparent hover:border-white/20"
+                }`}
+                onClick={() => setCurrentView("subscription")}
+              >
+                <CreditCard className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-1" />
+                <span className="hidden sm:inline">Subscriptions</span>
+              </Button>
+              <Button
+                variant={currentView === "settings" ? "default" : "ghost"}
+                size="sm"
+                className={`h-8 rounded-md px-2 sm:px-3 transition-all duration-200 text-xs sm:text-sm ${
+                  currentView === "settings" 
+                    ? "bg-white text-blue-700 hover:bg-white/90 shadow-md font-semibold" 
+                    : "text-white hover:bg-white/15 border border-transparent hover:border-white/20"
+                }`}
+                onClick={() => setCurrentView("settings")}
+              >
+                <Settings className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-1" />
+                <span className="hidden sm:inline">Settings</span>
+              </Button>
+              <div className="hidden lg:block w-px h-5 bg-white/30 mx-0.5"></div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 text-white hover:bg-red-500/20 hover:text-white border border-transparent hover:border-red-400/30 rounded-md px-2 sm:px-3 transition-all duration-200 text-xs sm:text-sm"
+                onClick={handleLogout}
+              >
+                <LogOut className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-1" />
+                <span className="hidden sm:inline">Logout</span>
+              </Button>
+            </div>
           </div>
         </div>
       </div>

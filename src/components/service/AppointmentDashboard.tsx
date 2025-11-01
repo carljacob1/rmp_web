@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { OfflinePOS } from "@/components/pos/OfflinePOS";
 import { dbGetAll, dbPut, dbDelete } from "@/lib/indexeddb";
+import { getCurrentUserId, filterByUserId } from "@/lib/userUtils";
 import { BulkUpload } from "@/components/common/BulkUpload";
 
 interface Appointment {
@@ -42,12 +43,16 @@ export function AppointmentDashboard() {
   const { toast } = useToast();
   
   const loadData = async () => {
+    const userId = await getCurrentUserId();
     const [apt, svc] = await Promise.all([
       dbGetAll<Appointment>('appointments'),
       dbGetAll<ServiceItem>('services')
     ]);
-    setAppointments(apt || []);
-    setServices(svc || []);
+    // Filter by userId
+    const userApts = userId ? filterByUserId(apt || [], userId) : apt || [];
+    const userSvcs = userId ? filterByUserId(svc || [], userId) : svc || [];
+    setAppointments(userApts);
+    setServices(userSvcs);
   };
 
   useEffect(() => {
@@ -59,9 +64,18 @@ export function AppointmentDashboard() {
 
   const handleSaveService = async (service: ServiceItem) => {
     try {
+      const userId = await getCurrentUserId();
+      if (!userId) {
+        toast({
+          title: "Error",
+          description: "Please log in to save services",
+          variant: "destructive"
+        });
+        return;
+      }
       const serviceWithId = service.id 
-        ? service 
-        : { ...service, id: `svc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` };
+        ? { ...service, userId }
+        : { ...service, id: `svc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, userId };
       
       await dbPut('services', serviceWithId);
       await loadData();

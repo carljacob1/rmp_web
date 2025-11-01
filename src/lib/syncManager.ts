@@ -1,6 +1,7 @@
 // Enhanced Sync Manager: Bidirectional sync with conflict resolution
 import { getSupabaseClient } from './supabaseClient';
 import { dbGetAll, dbPut, dbGetById, StoreName } from './indexeddb';
+import { forceAllKeysToLowercase, normalizeProductKeys } from './keyNormalizer';
 
 export interface SyncQueueItem {
   id: string;
@@ -89,10 +90,19 @@ export async function syncFromSupabase(table: string, storeName: StoreName): Pro
   }
 
   try {
-    // Try with explicit schema first (api), fallback to public if needed
+    // Query with api schema (configured in supabaseClient)
     const { data, error } = await sb.from(table).select('*').order('updated_at', { ascending: false });
     
     if (error) {
+      // Provide helpful error message for schema issues
+      if (error.code === 'PGRST106') {
+        console.error(`[Sync] Schema configuration error for ${table}: ${error.message}`);
+        console.error('[Sync] Please configure Supabase Dashboard:');
+        console.error('[Sync] 1. Go to: Settings → API');
+        console.error('[Sync] 2. Find: Database Settings → Exposed Schemas');
+        console.error('[Sync] 3. Set it to: api');
+        console.error('[Sync] 4. Save and restart your app');
+      }
       throw error;
     }
 
@@ -185,113 +195,128 @@ export async function syncToSupabase(table: string, storeName: StoreName): Promi
 
     if (localData.length === 0) return;
     
-    // Normalize local data: ensure keys match what we expect (camelCase for TypeScript)
-    // This handles any data that might have been stored with wrong case
+    // CRITICAL: Normalize local data IMMEDIATELY - use dedicated normalizer
+    // This handles any data that might have been stored with wrong case (like Lowstockthreshold)
     localData = localData.map((item: any) => {
-      const normalized: any = {};
-      for (const key of Object.keys(item)) {
-        // Normalize to camelCase for known fields
-        // Handle all possible case variations
-        const lowerKey = key.toLowerCase().trim();
-        let normalizedKey = key;
-        if (lowerKey === 'lowstockthreshold' || lowerKey === 'low_stock_threshold') {
-          normalizedKey = 'lowStockThreshold';
-        } else if (lowerKey === 'performancescore' || lowerKey === 'performance_score') {
-          normalizedKey = 'performanceScore';
-        }
-        // Avoid duplicates
-        if (normalized[normalizedKey] === undefined) {
-          normalized[normalizedKey] = item[key];
-        }
+      // For products, use specialized normalizer
+      if (table === 'products' && storeName === 'products') {
+        return normalizeProductKeys(item);
       }
-      return normalized;
+      
+      // For other tables, use general normalizer
+      return forceAllKeysToLowercase(item);
     });
 
     // Fetch current remote data to check for conflicts
-    const { data: remoteData } = await sb.from(table).select('*');
+    const { data: remoteData, error: remoteError } = await sb.from(table).select('*');
+    
+    if (remoteError) {
+      if (remoteError.code === 'PGRST106') {
+        console.error(`[Sync] Schema configuration error: ${remoteError.message}`);
+        console.error('[Sync] Please configure Supabase to expose "api" schema');
+      }
+      throw remoteError;
+    }
+    
     const remoteMap = new Map((remoteData || []).map(item => [item.id, item]));
 
       const updates: any[] = [];
       const now = new Date().toISOString();
 
     for (const localItem of localData) {
-      // Ensure timestamps
-      if (!localItem.updated_at) localItem.updated_at = now;
-      if (!localItem.created_at) localItem.created_at = now;
+      // CRITICAL: Force normalize the item AGAIN using dedicated normalizer
+      // This is a safety net in case normalization above didn't catch everything
+      let preNormalized: any;
+      if (table === 'products' && storeName === 'products') {
+        preNormalized = normalizeProductKeys(localItem);
+      } else {
+        preNormalized = forceAllKeysToLowercase(localItem);
+      }
       
-      const remoteItem = remoteMap.get(localItem.id);
+      // Ensure timestamps
+      if (!preNormalized.updated_at) preNormalized.updated_at = now;
+      if (!preNormalized.created_at) preNormalized.created_at = now;
+      
+      const remoteItem = remoteMap.get(preNormalized.id);
 
       if (remoteItem) {
         // Check if local is newer or equal (for conflict resolution)
-        const localTime = new Date(localItem.updated_at || localItem.created_at || 0).getTime();
+        const localTime = new Date(preNormalized.updated_at || preNormalized.created_at || 0).getTime();
         const remoteTime = new Date(remoteItem.updated_at || remoteItem.created_at || 0).getTime();
 
         if (localTime >= remoteTime) {
-          // Local is newer or same, push it
-          updates.push(localItem);
+          // Local is newer or same, push it (use preNormalized which has lowercase keys)
+          updates.push(preNormalized);
         } else {
           // Remote is newer, pull it down instead (normalize first)
           const normalizedRemote = normalizeFromSupabase(remoteItem);
           await dbPut(storeName, normalizedRemote);
         }
       } else {
-        // New local item, push it
-        updates.push(localItem);
+        // New local item, push it (use preNormalized which has lowercase keys)
+        updates.push(preNormalized);
       }
     }
 
     // Batch upsert to Supabase
     if (updates.length > 0) {
-      // Step 1: Convert all keys to lowercase first
-      const mapped = updates.map(item => mapKeysForSupabase(item));
+      // Step 1: Convert all keys to lowercase using dedicated normalizer
+      // CRITICAL: This MUST eliminate ANY uppercase keys including Lowstockthreshold
+      const mapped = updates.map(item => {
+        if (table === 'products' && storeName === 'products') {
+          return normalizeProductKeys(item);
+        }
+        return forceAllKeysToLowercase(item);
+      });
       
       // Step 2: Filter to only safe columns (already lowercase)
       const filtered = mapped.map(item => filterColumnsForTable(table, item));
       
-      // Step 3: Final pass - rebuild entire object with ONLY lowercase keys
-      const verified = filtered.map((item: any) => {
-        const finalItem: any = {};
-        // Rebuild object - ensure every key is lowercase
-        for (const key of Object.keys(item)) {
-          // Force to lowercase - handle all variations
-          let lowerKey = key.toLowerCase().trim();
-          
-          // Special handling for threshold - catch ALL variations
-          if (lowerKey.includes('threshold') || lowerKey === 'lowstockthreshold') {
-            lowerKey = 'lowstockthreshold';
-          }
-          
-          // CRITICAL: Always use lowercase key, log if we see wrong case
-          if (key !== key.toLowerCase()) {
-            console.warn(`[Sync] Key "${key}" was not lowercase! Converting to "${lowerKey}"`);
-          }
-          
-          // Store with lowercase key
-          finalItem[lowerKey] = item[key];
+      // Step 3: Final pass - use dedicated normalizer to GUARANTEE lowercase
+      let verified = filtered.map((item: any) => {
+        // Use the dedicated normalizer which is guaranteed to work
+        if (table === 'products' && storeName === 'products') {
+          return normalizeProductKeys(item);
         }
-        
-        // Validate: check for any uppercase keys (should be impossible)
-        const uppercaseKeys = Object.keys(finalItem).filter(k => k !== k.toLowerCase());
-        if (uppercaseKeys.length > 0) {
-          console.error(`[Sync] CRITICAL ERROR: Found uppercase keys after conversion:`, uppercaseKeys);
-          // Force fix them
-          const fixed: any = {};
-          for (const k of Object.keys(finalItem)) {
-            fixed[k.toLowerCase()] = finalItem[k];
-          }
-          Object.assign(finalItem, fixed);
-        }
-        
-        return finalItem;
+        return forceAllKeysToLowercase(item);
       });
       
-      // Final validation before sending
+      // ALWAYS apply one final normalization pass before sending
+      verified = verified.map((item: any) => {
+        if (table === 'products' && storeName === 'products') {
+          return normalizeProductKeys(item);
+        }
+        return forceAllKeysToLowercase(item);
+      });
+      
+      // Final validation before sending - ABSOLUTE FINAL CHECK
       if (verified.length > 0 && table === 'products') {
         const keys = Object.keys(verified[0]);
         const badKeys = keys.filter(k => k !== k.toLowerCase());
         if (badKeys.length > 0) {
           console.error(`[Sync] BEFORE SEND - Found uppercase keys:`, badKeys);
           console.error(`[Sync] All keys:`, keys);
+          
+          // NUCLEAR OPTION: Force rebuild one more time
+          verified = verified.map((item: any) => {
+            const rebuilt: any = {};
+            for (const k of Object.keys(item)) {
+              const kLower = String(k).toLowerCase().trim();
+              rebuilt[kLower.includes('threshold') ? 'lowstockthreshold' : kLower] = item[k];
+            }
+            return rebuilt;
+          });
+          
+          // Final check again
+          const finalKeys = Object.keys(verified[0]);
+          const finalBadKeys = finalKeys.filter(k => k !== k.toLowerCase());
+          if (finalBadKeys.length > 0) {
+            console.error(`[Sync] CRITICAL: Still found uppercase keys after nuclear option:`, finalBadKeys);
+          } else {
+            console.log(`[Sync] Nuclear option fixed all uppercase keys`);
+          }
+        } else {
+          console.log(`[Sync] All keys verified lowercase before sending to Supabase`);
         }
       }
       
@@ -301,6 +326,10 @@ export async function syncToSupabase(table: string, storeName: StoreName): Promi
       });
 
       if (error) {
+        if (error.code === 'PGRST106') {
+          console.error(`[Sync] Schema configuration error: ${error.message}`);
+          console.error('[Sync] Please configure Supabase Dashboard → Settings → API → Exposed Schemas → Add "api"');
+        }
         console.error(`[Sync] Supabase error for ${table}:`, error);
         if (verified.length > 0) {
           const keys = Object.keys(verified[0]);
@@ -340,36 +369,45 @@ export async function processSyncQueue(): Promise<{ success: number; failed: num
 
       if (item.operation === 'delete') {
         const { error } = await sb.from(item.table).delete().eq('id', item.data.id || item.data);
-        if (error) throw error;
-      } else if (item.operation === 'insert' || item.operation === 'update' || item.operation === 'upsert') {
-        // Ensure ALL keys are lowercase - rebuild object completely
-        const verified: any = {};
-        for (const key of Object.keys(filtered)) {
-          let lowerKey = key.toLowerCase().trim();
-          
-          // Handle all threshold variations
-          if (lowerKey.includes('threshold')) {
-            lowerKey = 'lowstockthreshold';
+        if (error) {
+          if (error.code === 'PGRST106') {
+            console.error(`[Sync Queue] Schema configuration error: ${error.message}`);
+            console.error('[Sync Queue] Please configure Supabase to expose "api" schema');
           }
-          
-          // Always use lowercase key
-          verified[lowerKey] = filtered[key];
+          throw error;
+        }
+      } else if (item.operation === 'insert' || item.operation === 'update' || item.operation === 'upsert') {
+        // Use dedicated normalizer - same as syncToSupabase
+        let nuclear: any;
+        if (item.table === 'products') {
+          nuclear = normalizeProductKeys(filtered);
+        } else {
+          nuclear = forceAllKeysToLowercase(filtered);
         }
         
-        // Final pass - ensure absolutely everything is lowercase
-        const finalVerified: any = {};
-        for (const key of Object.keys(verified)) {
-          finalVerified[key.toLowerCase()] = verified[key];
+        // Final validation before sending
+        const badKeys = Object.keys(nuclear).filter(k => k !== k.toLowerCase());
+        if (badKeys.length > 0) {
+          console.error(`[Sync Queue] CRITICAL: Found uppercase keys, applying nuclear fix:`, badKeys);
+          // Apply nuclear fix one more time
+          nuclear = forceAllKeysToLowercase(nuclear);
         }
-        Object.assign(verified, finalVerified);
         
-        const { error } = await sb.from(item.table).upsert(verified, { 
+        const { error } = await sb.from(item.table).upsert(nuclear, { 
           onConflict: 'id',
           returning: 'minimal' as any 
         });
         if (error) {
+          if (error.code === 'PGRST106') {
+            console.error(`[Sync Queue] Schema configuration error: ${error.message}`);
+            console.error('[Sync Queue] Please configure Supabase Dashboard → Settings → API → Exposed Schemas → Add "api"');
+          }
           console.error(`[Sync Queue] Error for ${item.table}:`, error);
-          console.error(`[Sync Queue] Keys sent:`, Object.keys(verified));
+          console.error(`[Sync Queue] Keys sent:`, Object.keys(nuclear));
+          const badKeys2 = Object.keys(nuclear).filter(k => k !== k.toLowerCase());
+          if (badKeys2.length > 0) {
+            console.error(`[Sync Queue] Uppercase keys found:`, badKeys2);
+          }
           throw error;
         }
       }
@@ -417,16 +455,16 @@ export async function syncTable(table: string, storeName: StoreName): Promise<vo
   }
 }
 
-// Helper: Map camelCase to lowercase keys for Supabase
+// Helper: Map camelCase to lowercase keys for Supabase - AGGRESSIVE normalization
 function mapKeysForSupabase(obj: any): any {
   if (!obj || typeof obj !== 'object') return obj;
   
   const out: any = {};
   for (const key of Object.keys(obj)) {
-    // Convert camelCase to all lowercase: lowStockThreshold -> lowstockthreshold
-    // IMPORTANT: Force ALL keys to lowercase, no exceptions
+    // Convert ANY case to all lowercase: Lowstockthreshold -> lowstockthreshold
+    // IMPORTANT: Force ALL keys to lowercase, NO EXCEPTIONS
     // Handle ALL case variations: Lowstockthreshold, lowStockThreshold, LOWSTOCKTHRESHOLD, LowStockThreshold, etc.
-    let lowerFlat = key.toLowerCase().trim();
+    let lowerFlat = String(key).toLowerCase().trim();
     
     // Special handling for known problematic keys - normalize all threshold variations
     if (lowerFlat.includes('threshold')) {
@@ -454,10 +492,18 @@ function mapKeysForSupabase(obj: any): any {
       }
     }
     
-    // Always use lowercase key - overwrite if duplicate (shouldn't happen)
+    // Always use lowercase key - overwrite if duplicate (prevents case variations)
+    // This ensures only one key exists, even if input had case variations
     out[lowerFlat] = value;
   }
-  return out;
+  
+  // Final safety check: ensure NO uppercase keys in output
+  const finalOut: any = {};
+  for (const k of Object.keys(out)) {
+    finalOut[String(k).toLowerCase().trim()] = out[k];
+  }
+  
+  return finalOut;
 }
 
 // Helper: Normalize data FROM Supabase (lowercase/snake_case) to camelCase for local storage
@@ -516,19 +562,30 @@ const SAFE_COLUMNS: Record<string, string[]> = {
   employees: ['id','name','email','phone','role','status','employeid','pin','performancescore','joindate','salary','created_at','createdat','updated_at'],
   attendance: ['id','employeeid','date','checkin','checkout','status','notes','created_at','createdat','updated_at'],
   appointments: ['id','customername','customerphone','customeremail','servicename','serviceid','datetime','duration','status','notes','created_at','createdat','updated_at'],
-  services: ['id','name','description','price','duration','category','available','created_at','createdat','updated_at']
+  services: ['id','name','description','price','duration','category','available','created_at','createdat','updated_at'],
+  locations: ['id','name','address','phone','email','manager','created_at','createdat','updated_at'],
+  subscriptions: ['id','userid','plantype','startdate','enddate','status','created_at','createdat','updated_at'],
+  payments: ['id','orderid','amount','paymentmethod','paymentstatus','transactionid','timestamp','created_at','createdat','updated_at']
 };
 
 function filterColumnsForTable(table: string, obj: any): any {
   const allow = SAFE_COLUMNS[table];
-  if (!allow) return obj;
+  if (!allow) {
+    // Even for unknown tables, force all keys to lowercase
+    const normalized: any = {};
+    for (const key of Object.keys(obj)) {
+      normalized[String(key).toLowerCase().trim()] = obj[key];
+    }
+    return normalized;
+  }
   const out: any = {};
   
   // Create case-insensitive lookup map for input keys
+  // ASSUME input keys are already lowercase (from mapKeysForSupabase), but handle case variations just in case
   const inputKeyMap = new Map<string, string>();
   for (const key of Object.keys(obj)) {
-    const lowerKey = key.toLowerCase().trim();
-    // Store the original key, but ensure we map all variations correctly
+    const lowerKey = String(key).toLowerCase().trim();
+    // Store the FIRST occurrence of each lowercase key
     if (!inputKeyMap.has(lowerKey)) {
       inputKeyMap.set(lowerKey, key);
     }
@@ -539,12 +596,11 @@ function filterColumnsForTable(table: string, obj: any): any {
   for (const dbColumnName of allow) {
     const lowerDbName = dbColumnName.toLowerCase().trim();
     // Handle special case for lowstockthreshold variations
-    let lookupKey = lowerDbName;
     if (lowerDbName === 'lowstockthreshold') {
       // Try multiple variations - find any threshold key
       let inputKey: string | undefined;
       
-      // Try exact matches first
+      // Try exact matches first (already lowercase from mapKeysForSupabase)
       inputKey = inputKeyMap.get('lowstockthreshold') || 
                  inputKeyMap.get('low_stock_threshold');
       
@@ -602,7 +658,7 @@ export function subscribeToTable(
       'postgres_changes',
       {
         event: '*',
-        schema: 'api', // Updated to use 'api' schema to match Supabase configuration
+        schema: 'api', // API schema - matches supabase_migration_api.sql
         table: table,
       },
       async (payload) => {

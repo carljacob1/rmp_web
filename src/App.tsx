@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { useEffect } from "react";
 import { migrateLocalStorageToIndexedDB, resetDBConnection, forceDBUpgrade } from "@/lib/indexeddb";
-import { initializeSync, setupOnlineSyncListener, stopPeriodicSync } from "@/lib/syncService";
+import { initializeSync, setupOnlineSyncListener } from "@/lib/syncService";
  
 import Landing from "./pages/Landing";
 import Pricing from "./pages/Pricing";
@@ -41,9 +41,7 @@ const App = () => {
       }
     };
     
-    let cleanupSync: (() => void) | undefined;
-    
-    const setupSync = async () => {
+    const setupApp = async () => {
       try {
         // Wait for DB upgrade to complete
         await ensureDBUpgrade();
@@ -51,22 +49,34 @@ const App = () => {
         // One-time migration from localStorage to IndexedDB
         await migrateLocalStorageToIndexedDB();
         
-        // Initialize sync service (will sync when online)
-        await initializeSync();
+        // Initialize Supabase sync (only if Supabase is configured)
+        try {
+          await initializeSync();
+        } catch (syncError) {
+          console.warn('[App] Supabase sync initialization failed (might be offline or not configured):', syncError);
+        }
         
-        // Setup online/offline listeners for auto-sync
-        cleanupSync = setupOnlineSyncListener();
+        // Setup online/offline sync listener
+        const cleanup = setupOnlineSyncListener();
+        
+        // Return cleanup function
+        return cleanup;
       } catch (error) {
-        console.error('Error setting up sync:', error);
+        console.error('Error setting up app:', error);
       }
     };
     
-    setupSync();
+    let cleanupFn: (() => void) | undefined;
+    
+    setupApp().then(cleanup => {
+      cleanupFn = cleanup;
+    });
     
     // Cleanup on unmount
     return () => {
-      if (cleanupSync) cleanupSync();
-      stopPeriodicSync();
+      if (cleanupFn && typeof cleanupFn === 'function') {
+        cleanupFn();
+      }
     };
   }, []);
 

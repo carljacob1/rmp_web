@@ -3,11 +3,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Shield, Settings as SettingsIcon, Bell, Wifi } from "lucide-react";
-import { AdminLogin } from "@/components/admin/AdminLogin";
-import { AdminDashboard } from "@/components/admin/AdminDashboard";
+import { Settings as SettingsIcon, Bell, Wifi } from "lucide-react";
 import { NetworkStatus } from "@/components/common/NetworkStatus";
-import { SyncStatus } from "@/components/common/SyncStatus";
 
 interface SettingsProps {
   onBack: () => void;
@@ -15,30 +12,6 @@ interface SettingsProps {
 }
 
 export function Settings({ onBack, businessType = "retail" }: SettingsProps) {
-  const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(false);
-  const [showAdminLogin, setShowAdminLogin] = useState(false);
-
-  if (showAdminLogin && !isAdminLoggedIn) {
-    return (
-      <AdminLogin 
-        onLogin={() => {
-          setIsAdminLoggedIn(true);
-          setShowAdminLogin(false);
-        }} 
-      />
-    );
-  }
-
-  if (isAdminLoggedIn) {
-    return (
-      <AdminDashboard 
-        onLogout={() => {
-          setIsAdminLoggedIn(false);
-          setShowAdminLogin(false);
-        }} 
-      />
-    );
-  }
 
   return (
     <div className="space-y-6">
@@ -57,10 +30,6 @@ export function Settings({ onBack, businessType = "retail" }: SettingsProps) {
           <TabsTrigger value="general">
             <SettingsIcon className="h-4 w-4 mr-2" />
             General
-          </TabsTrigger>
-          <TabsTrigger value="admin">
-            <Shield className="h-4 w-4 mr-2" />
-            Admin
           </TabsTrigger>
           <TabsTrigger value="notifications">
             <Bell className="h-4 w-4 mr-2" />
@@ -102,33 +71,6 @@ export function Settings({ onBack, businessType = "retail" }: SettingsProps) {
           </Card>
         </TabsContent>
 
-        <TabsContent value="admin" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Admin Panel</CardTitle>
-              <CardDescription>
-                Access administrative functions and system management
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-col items-center justify-center py-8 space-y-4">
-                <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center">
-                  <Shield className="h-8 w-8 text-primary" />
-                </div>
-                <div className="text-center">
-                  <h3 className="text-lg font-semibold mb-2">Admin Access</h3>
-                  <p className="text-sm text-muted-foreground mb-4">
-                    Click below to access the admin panel. You'll need admin credentials to proceed.
-                  </p>
-                  <Button onClick={() => setShowAdminLogin(true)}>
-                    <Shield className="h-4 w-4 mr-2" />
-                    Access Admin Panel
-                  </Button>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
 
         <TabsContent value="notifications" className="space-y-4">
           <Card>
@@ -162,7 +104,6 @@ export function Settings({ onBack, businessType = "retail" }: SettingsProps) {
 
         <TabsContent value="network" className="space-y-4">
           <NetworkStatus />
-          <SyncStatus />
         </TabsContent>
       </Tabs>
     </div>

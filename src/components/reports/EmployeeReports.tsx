@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Users, DollarSign, Clock, TrendingUp, Download, Plus, AlertTriangle, UserCheck } from "lucide-react";
+import { Users, DollarSign, Clock, TrendingUp, Download, Plus, AlertTriangle, UserCheck, RotateCcw } from "lucide-react";
 import { DateRange } from "./ReportsManager";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { formatIndianCurrency } from "@/lib/indian-tax-utils";
@@ -71,16 +71,19 @@ export function EmployeeReports({ reportType, dateRange }: EmployeeReportsProps)
   const [offlineMode, setOfflineMode] = useState(() => navigator.onLine === false);
 
   // Load data from IndexedDB
+  const loadEmployees = useCallback(async () => {
+    try {
+      const emps = await dbGetAll<Employee>('employees');
+      setEmployees(emps || []);
+      console.log(`Loaded ${emps.length} employees from IndexedDB`);
+    } catch (error) {
+      console.error('Error loading employee data:', error);
+      setEmployees([]);
+    }
+  }, []);
+
   useEffect(() => {
-    const loadData = async () => {
-      try {
-        const emps = await dbGetAll<Employee>('employees');
-        setEmployees(emps || []);
-      } catch (error) {
-        console.error('Error loading employee data:', error);
-      }
-    };
-    loadData();
+    loadEmployees();
 
     const storedPayroll = localStorage.getItem(PAYROLL_STORAGE_KEY);
     if (storedPayroll) {
@@ -90,7 +93,7 @@ export function EmployeeReports({ reportType, dateRange }: EmployeeReportsProps)
         console.error('Error loading payroll data:', error);
       }
     }
-  }, []);
+  }, [loadEmployees]);
 
   // Save payroll to localStorage (can be moved to IndexedDB later)
   useEffect(() => {
@@ -159,8 +162,8 @@ export function EmployeeReports({ reportType, dateRange }: EmployeeReportsProps)
 
     try {
       await dbPut('employees', employee);
-      const emps = await dbGetAll<Employee>('employees');
-      setEmployees(emps || []);
+      // Reload employees from IndexedDB to ensure UI is updated
+      await loadEmployees();
       setNewEmployee({ status: 'active', performanceScore: 80, employeeId: '', pin: '' });
       setIsEmployeeDialogOpen(false);
       
@@ -190,8 +193,8 @@ export function EmployeeReports({ reportType, dateRange }: EmployeeReportsProps)
           // Retry after upgrade
           await new Promise(resolve => setTimeout(resolve, 1000)); // Wait a bit
           await dbPut('employees', employee);
-          const emps = await dbGetAll<Employee>('employees');
-          setEmployees(emps || []);
+          // Reload employees from IndexedDB to ensure UI is updated
+          await loadEmployees();
           setNewEmployee({ status: 'active', performanceScore: 80, employeeId: '', pin: '' });
           setIsEmployeeDialogOpen(false);
           
@@ -473,7 +476,18 @@ export function EmployeeReports({ reportType, dateRange }: EmployeeReportsProps)
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card>
           <CardHeader>
-            <CardTitle>Employee List ({employees.length})</CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle>Employee List ({employees.length})</CardTitle>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={loadEmployees}
+                className="ml-2"
+              >
+                <RotateCcw className="h-4 w-4 mr-2" />
+                Refresh
+              </Button>
+            </div>
           </CardHeader>
           <CardContent>
             <Table>

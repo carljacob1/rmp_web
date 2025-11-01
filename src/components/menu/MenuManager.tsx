@@ -45,8 +45,8 @@ interface Category {
 }
 
 import { dbGetAll, dbPut, dbDelete } from "@/lib/indexeddb";
-import { deleteOne, syncCategoriesToLocal, syncProductsToLocal, upsertOne } from "@/lib/sync";
 import { BulkUpload } from "@/components/common/BulkUpload";
+import { getCurrentUserId, filterByUserId } from "@/lib/userUtils";
 
 export function MenuManager({ businessType = "restaurant" }: { businessType?: string }) {
   const [categories, setCategories] = useState<Category[]>([]);
@@ -60,16 +60,16 @@ export function MenuManager({ businessType = "restaurant" }: { businessType?: st
 
   useEffect(() => {
     (async () => {
-      // Try pulling latest from Supabase into local, then read local
-      try {
-        await Promise.all([syncCategoriesToLocal(), syncProductsToLocal()]);
-      } catch {}
+      const userId = await getCurrentUserId();
       const [cats, products] = await Promise.all([
         dbGetAll<Category>('categories'),
         dbGetAll<MenuItem>('products')
       ]);
-      setCategories(cats.sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0)));
-      setMenuItems(products);
+      // Filter by userId
+      const userCats = userId ? filterByUserId(cats, userId) : cats;
+      const userProducts = userId ? filterByUserId(products, userId) : products;
+      setCategories(userCats.sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0)));
+      setMenuItems(userProducts);
     })();
   }, []);
 
@@ -82,9 +82,19 @@ export function MenuManager({ businessType = "restaurant" }: { businessType?: st
   };
 
   const handleSaveItem = async (item: MenuItem) => {
-    const itemWithId = item.id ? item : { ...item, id: `prod_${Date.now()}_${Math.random().toString(36).slice(2,8)}` };
+    const userId = await getCurrentUserId();
+    if (!userId) {
+      toast({
+        title: "Error",
+        description: "Please log in to save items",
+        variant: "destructive"
+      });
+      return;
+    }
+    const itemWithId = item.id 
+      ? { ...item, userId }
+      : { ...item, id: `prod_${Date.now()}_${Math.random().toString(36).slice(2,8)}`, userId };
     await dbPut<MenuItem>('products', itemWithId);
-    try { await upsertOne('products', itemWithId as any); } catch {}
     setMenuItems(prev => {
       const exists = prev.some(i => i.id === itemWithId.id);
       return exists ? prev.map(i => i.id === itemWithId.id ? itemWithId : i) : [...prev, itemWithId];
@@ -96,15 +106,24 @@ export function MenuManager({ businessType = "restaurant" }: { businessType?: st
 
   const handleDeleteItem = async (id: string) => {
     await dbDelete('products', id);
-    try { await deleteOne('products', id); } catch {}
     setMenuItems(prev => prev.filter(item => item.id !== id));
     toast({ title: "Item deleted successfully" });
   };
 
   const handleSaveCategory = async (category: Category) => {
-    const categoryWithId = category.id ? category : { ...category, id: `cat_${Date.now()}_${Math.random().toString(36).slice(2,8)}` };
+    const userId = await getCurrentUserId();
+    if (!userId) {
+      toast({
+        title: "Error",
+        description: "Please log in to save categories",
+        variant: "destructive"
+      });
+      return;
+    }
+    const categoryWithId = category.id 
+      ? { ...category, userId }
+      : { ...category, id: `cat_${Date.now()}_${Math.random().toString(36).slice(2,8)}`, userId };
     await dbPut<Category>('categories', categoryWithId);
-    try { await upsertOne('categories', categoryWithId as any); } catch {}
     setCategories(prev => {
       const exists = prev.some(c => c.id === categoryWithId.id);
       const next = exists ? prev.map(c => c.id === categoryWithId.id ? categoryWithId : c) : [...prev, categoryWithId];
