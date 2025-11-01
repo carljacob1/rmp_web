@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { dbPut } from "@/lib/indexeddb";
+import { getCurrentUserId } from "@/lib/userUtils";
 
 interface BulkUploadProps {
   businessType: string;
@@ -98,6 +99,17 @@ export function BulkUpload({ businessType, storeName, fields, onUploadComplete }
       return;
     }
 
+    // Get current user ID for data isolation
+    const userId = await getCurrentUserId();
+    if (!userId) {
+      toast({
+        title: "Error",
+        description: "Please log in to upload data",
+        variant: "destructive"
+      });
+      return;
+    }
+
     // Validate required fields
     const requiredFields = fields.filter(f => f.required);
     const invalid = preview.some(item => 
@@ -115,9 +127,30 @@ export function BulkUpload({ businessType, storeName, fields, onUploadComplete }
 
     setUploading(true);
     try {
-      // Upload each item to IndexedDB
+      // Import key normalizer for proper key formatting
+      const { forceAllKeysToLowercase } = await import('@/lib/keyNormalizer');
+      
+      // Upload each item to IndexedDB with proper normalization
+      const now = new Date().toISOString();
       for (const item of preview) {
-        await dbPut(storeName, item);
+        // Normalize keys and add timestamps (same as manual save)
+        const normalized = forceAllKeysToLowercase({
+          ...item,
+          userId: userId, // Add userId for data isolation
+          updated_at: item.updated_at || now,
+          created_at: item.created_at || now
+        });
+        
+        // Add camelCase alias for TypeScript code compatibility
+        const itemWithAliases = {
+          ...normalized,
+          // Preserve camelCase for fields that need it
+          ...(normalized.lowstockthreshold !== undefined && {
+            lowStockThreshold: normalized.lowstockthreshold
+          })
+        };
+        
+        await dbPut(storeName, itemWithAliases);
       }
 
       toast({

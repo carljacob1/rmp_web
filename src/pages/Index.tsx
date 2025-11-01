@@ -8,7 +8,6 @@ import { EPRDashboard } from "@/components/healthcare/EPRDashboard";
 import { RefillingDashboard } from "@/components/refilling/RefillingDashboard";
 import { ReportsManager } from "@/components/reports/ReportsManager";
 import { AccountingDashboard } from "@/components/accounting/AccountingDashboard";
-import { AdminLogin } from "@/components/admin/AdminLogin";
 import { AdminDashboard } from "@/components/admin/AdminDashboard";
 import { Login } from "@/components/auth/Login";
 import { Button } from "@/components/ui/button";
@@ -30,8 +29,7 @@ const Index = () => {
     return (saved as "demo" | "dashboard" | "reports" | "accounting") || "demo";
   });
   
-  const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(false);
-  const [showAdminLogin, setShowAdminLogin] = useState(false);
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   // Save business type selection to localStorage whenever it changes
@@ -94,24 +92,12 @@ const Index = () => {
     );
   }
 
-  // Handle admin login/logout
-  if (showAdminLogin && !isAdminLoggedIn) {
-    return (
-      <AdminLogin 
-        onLogin={() => {
-          setIsAdminLoggedIn(true);
-          setShowAdminLogin(false);
-        }} 
-      />
-    );
-  }
-
-  if (isAdminLoggedIn) {
+  // Handle admin panel
+  if (showAdminPanel) {
     return (
       <AdminDashboard 
         onLogout={() => {
-          setIsAdminLoggedIn(false);
-          setShowAdminLogin(false);
+          setShowAdminPanel(false);
         }} 
       />
     );
@@ -163,7 +149,7 @@ const Index = () => {
             </Button>
             <Button
               variant="ghost"
-              onClick={() => setShowAdminLogin(true)}
+              onClick={() => setShowAdminPanel(true)}
               className="text-white hover:bg-white/10"
             >
               <Shield className="h-4 w-4 mr-2" />

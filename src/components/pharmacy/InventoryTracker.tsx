@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { dbGetAll, dbPut, dbDelete } from "@/lib/indexeddb";
+import { getCurrentUserId, filterByUserId } from "@/lib/userUtils";
 import { BulkUpload } from "@/components/common/BulkUpload";
 
 interface Medicine {
@@ -42,8 +43,11 @@ export function InventoryTracker() {
   // Load medicines from IndexedDB
   useEffect(() => {
     (async () => {
+      const userId = await getCurrentUserId();
       const items = await dbGetAll<Medicine>('medicines');
-      setMedicines(items);
+      // Filter by userId
+      const userMedicines = userId ? filterByUserId(items, userId) : items;
+      setMedicines(userMedicines);
     })();
   }, []);
 
@@ -124,7 +128,18 @@ export function InventoryTracker() {
   }).length;
 
   const handleSaveMedicine = async (medicine: Medicine) => {
-    const withId = medicine.id ? medicine : { ...medicine, id: Date.now().toString() };
+    const userId = await getCurrentUserId();
+    if (!userId) {
+      toast({
+        title: "Error",
+        description: "Please log in to save medicines",
+        variant: "destructive"
+      });
+      return;
+    }
+    const withId = medicine.id 
+      ? { ...medicine, userId }
+      : { ...medicine, id: Date.now().toString(), userId };
     await dbPut('medicines', withId);
     setMedicines(prev => {
       const exists = prev.some(m => m.id === withId.id);

@@ -4,8 +4,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Wifi, WifiOff, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
 import { getSupabaseClient } from '@/lib/supabaseClient';
-import { getSyncStatus } from '@/lib/syncService';
-import { getSyncQueue } from '@/lib/syncManager';
 import { dbGetAll } from '@/lib/indexeddb';
 
 export function NetworkStatus() {
@@ -14,8 +12,6 @@ export function NetworkStatus() {
     supabaseConfigured: false,
     supabaseConnected: false,
     indexedDBAvailable: false,
-    syncQueueCount: 0,
-    lastSyncTime: null as number | null,
     detectedMode: 'unknown' as 'online' | 'offline' | 'unknown'
   });
 
@@ -48,11 +44,7 @@ export function NetworkStatus() {
       indexedDBAvailable = false;
     }
 
-    // Get sync status
-    const syncStatus = await getSyncStatus();
-    const queue = await getSyncQueue();
-
-    // Determine mode
+    // Determine mode (no sync functionality)
     let detectedMode: 'online' | 'offline' = 'offline';
     if (browserOnline && supabaseConfigured && supabaseConnected) {
       detectedMode = 'online';
@@ -65,8 +57,6 @@ export function NetworkStatus() {
       supabaseConfigured,
       supabaseConnected,
       indexedDBAvailable,
-      syncQueueCount: queue.length,
-      lastSyncTime: syncStatus.lastSyncTime,
       detectedMode
     });
   };
@@ -124,8 +114,8 @@ export function NetworkStatus() {
           </div>
           <p className="text-sm text-muted-foreground">
             {status.detectedMode === 'online' 
-              ? '✓ Full sync enabled - Data syncs with Supabase'
-              : '⚠ Offline mode - Data stored locally, will sync when online'}
+              ? '✓ Online - Data stored locally in IndexedDB'
+              : '⚠ Offline mode - Data stored locally in IndexedDB'}
           </p>
         </div>
 
@@ -153,21 +143,6 @@ export function NetworkStatus() {
             <StatusBadge isOk={status.indexedDBAvailable} label={status.indexedDBAvailable ? 'Available' : 'Unavailable'} />
           </div>
 
-          <div className="flex items-center justify-between">
-            <span className="text-sm">Pending Sync Items:</span>
-            <Badge variant={status.syncQueueCount > 0 ? "warning" : "default"}>
-              {status.syncQueueCount}
-            </Badge>
-          </div>
-
-          <div className="flex items-center justify-between">
-            <span className="text-sm">Last Sync:</span>
-            <span className="text-sm text-muted-foreground">
-              {status.lastSyncTime 
-                ? new Date(status.lastSyncTime).toLocaleString()
-                : 'Never'}
-            </span>
-          </div>
         </div>
 
         {/* Recommendations */}
@@ -182,7 +157,7 @@ export function NetworkStatus() {
                   {!status.supabaseConfigured && <li>Supabase not configured (missing .env file)</li>}
                   {status.supabaseConfigured && !status.supabaseConnected && <li>Cannot connect to Supabase</li>}
                   <li>Data is being saved to IndexedDB locally</li>
-                  <li>Changes will sync automatically when connection is restored</li>
+                  <li>All data is stored locally only</li>
                 </ul>
               </div>
             </div>

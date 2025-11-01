@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { TrendingUp, TrendingDown, Package, DollarSign, ShoppingCart, AlertTriangle } from "lucide-react";
 import { DateRange, ReportType } from "./ReportsManager";
 import { dbGetAll } from "@/lib/indexeddb";
+import { getCurrentUserId, filterByUserId } from "@/lib/userUtils";
 
 interface RetailReportsProps {
   reportType: string;
@@ -37,12 +38,16 @@ export function RetailReports({ reportType, dateRange }: RetailReportsProps) {
     const loadData = async () => {
       try {
         setLoading(true);
+        const userId = await getCurrentUserId();
         const [ordersData, productsData] = await Promise.all([
           dbGetAll<Order>('orders'),
           dbGetAll<Product>('products')
         ]);
-        setOrders(ordersData || []);
-        setProducts(productsData || []);
+        // Filter by userId
+        const userOrders = userId ? filterByUserId(ordersData || [], userId) : ordersData || [];
+        const userProducts = userId ? filterByUserId(productsData || [], userId) : productsData || [];
+        setOrders(userOrders);
+        setProducts(userProducts);
       } catch (error) {
         console.error('Error loading report data:', error);
       } finally {

@@ -1,6 +1,6 @@
 // Global Sync Service: Handles app-wide sync initialization and periodic syncing
 import { getSupabaseClient } from './supabaseClient';
-import { syncTable, processSyncQueue, getSyncQueue } from './syncManager';
+import { syncTable, processSyncQueue, getSyncQueue, subscribeToTable } from './syncManager';
 import { StoreName } from './indexeddb';
 
 // Table to store mapping
@@ -17,11 +17,15 @@ const SYNC_TABLES: Array<{ table: string; store: StoreName }> = [
   { table: 'expenses', store: 'expenses' },
   { table: 'settings', store: 'settings' },
   { table: 'users', store: 'users' },
-  { table: 'registrations', store: 'registrations' }
+  { table: 'registrations', store: 'registrations' },
+  { table: 'locations', store: 'locations' },
+  { table: 'subscriptions', store: 'subscriptions' },
+  { table: 'payments', store: 'payments' }
 ];
 
 let syncInterval: NodeJS.Timeout | null = null;
 let isInitialSyncComplete = false;
+const realtimeSubscriptions: Array<() => void> = [];
 
 // Initialize sync: Perform initial sync when app loads
 export async function initializeSync(): Promise<void> {
@@ -45,6 +49,9 @@ export async function initializeSync(): Promise<void> {
     isInitialSyncComplete = true;
     console.log('[Sync Service] Initial sync complete');
     updateLastSyncTime();
+    
+    // Setup real-time subscriptions for all tables
+    setupRealTimeSubscriptions();
     
     // Start periodic sync
     startPeriodicSync();
@@ -147,11 +154,55 @@ export function updateLastSyncTime(): void {
   localStorage.setItem('lastSyncTime', Date.now().toString());
 }
 
+// Setup real-time subscriptions for all tables
+export function setupRealTimeSubscriptions(): void {
+  const sb = getSupabaseClient();
+  if (!sb || !navigator.onLine) {
+    console.warn('[Sync Service] Cannot setup real-time subscriptions: Supabase not available or offline');
+    return;
+  }
+
+  // Clean up existing subscriptions
+  cleanupRealTimeSubscriptions();
+
+  // Subscribe to all tables
+  SYNC_TABLES.forEach(({ table, store }) => {
+    try {
+      const unsubscribe = subscribeToTable(table, store, (data) => {
+        console.log(`[Sync Service] Real-time update received for ${table}:`, data);
+        // Data is already updated in IndexedDB by subscribeToTable
+        // You can add custom logic here if needed (e.g., update React state)
+      });
+      realtimeSubscriptions.push(unsubscribe);
+      console.log(`[Sync Service] Real-time subscription active for ${table}`);
+    } catch (error) {
+      console.error(`[Sync Service] Failed to subscribe to ${table}:`, error);
+    }
+  });
+
+  console.log(`[Sync Service] Real-time subscriptions setup complete for ${realtimeSubscriptions.length} tables`);
+}
+
+// Clean up all real-time subscriptions
+export function cleanupRealTimeSubscriptions(): void {
+  realtimeSubscriptions.forEach(unsubscribe => {
+    try {
+      unsubscribe();
+    } catch (error) {
+      console.error('[Sync Service] Error unsubscribing:', error);
+    }
+  });
+  realtimeSubscriptions.length = 0;
+}
+
 // Listen for online/offline events and trigger sync
 export function setupOnlineSyncListener(): () => void {
   const handleOnline = async () => {
     console.log('[Sync Service] Connection restored, syncing...');
     try {
+      // Re-setup real-time subscriptions when coming online
+      setupRealTimeSubscriptions();
+      
       await syncAllTables();
       updateLastSyncTime();
     } catch (error) {
@@ -159,10 +210,18 @@ export function setupOnlineSyncListener(): () => void {
     }
   };
 
+  const handleOffline = () => {
+    console.log('[Sync Service] Connection lost, cleaning up real-time subscriptions');
+    cleanupRealTimeSubscriptions();
+  };
+
   window.addEventListener('online', handleOnline);
+  window.addEventListener('offline', handleOffline);
 
   return () => {
     window.removeEventListener('online', handleOnline);
+    window.removeEventListener('offline', handleOffline);
+    cleanupRealTimeSubscriptions();
   };
 }
 

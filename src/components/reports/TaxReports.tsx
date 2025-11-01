@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { FileText, Download, DollarSign, Receipt, Calculator, AlertTriangle, Plus, Edit, Wifi, WifiOff, RotateCcw, Database, Cloud } from "lucide-react";
+import { FileText, Download, DollarSign, Receipt, Calculator, AlertTriangle, Plus, Edit, Database } from "lucide-react";
 import { DateRange } from "./ReportsManager";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { formatIndianCurrency, calculateGST, calculateTDS, calculateIncomeTax, saveToIndexedDB, loadFromIndexedDB } from "@/lib/indian-tax-utils";
@@ -62,9 +62,7 @@ export function TaxReports({ reportType, dateRange }: TaxReportsProps) {
     error,
     saveData,
     updateData,
-    deleteData,
-    syncData,
-    isOnline
+    deleteData
   } = useOfflineStorage<TaxEntry>('taxEntries', 'tax_entries');
   
   const [newEntry, setNewEntry] = useState<Partial<TaxEntry>>({
@@ -73,35 +71,6 @@ export function TaxReports({ reportType, dateRange }: TaxReportsProps) {
     status: 'pending'
   });
   const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const [isSyncing, setIsSyncing] = useState(false);
-
-  const handleSync = async () => {
-    if (!isOnline) {
-      toast({
-        title: "Offline",
-        description: "Cannot sync while offline",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    setIsSyncing(true);
-    try {
-      await syncData();
-      toast({
-        title: "Sync Complete",
-        description: "Tax data synchronized successfully",
-      });
-    } catch (error) {
-      toast({
-        title: "Sync Failed", 
-        description: "Unable to sync data. Will retry automatically.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsSyncing(false);
-    }
-  };
 
   const calculateTaxSummary = (): TaxSummary => {
     const filtered = filterEntriesByDateRange(taxEntries);
@@ -273,27 +242,6 @@ export function TaxReports({ reportType, dateRange }: TaxReportsProps) {
 
   const renderTaxSummary = () => (
     <div className="space-y-6">
-      {!isOnline && (
-        <Card className="border-warning bg-warning/5">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <WifiOff className="h-5 w-5 text-warning" />
-                <span className="text-sm font-medium">Offline Mode - Data saved locally using IndexedDB & localStorage</span>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleSync}
-                disabled={!isOnline || isSyncing}
-              >
-                <RotateCcw className={`h-4 w-4 mr-2 ${isSyncing ? 'animate-spin' : ''}`} />
-                {isSyncing ? 'Syncing...' : 'Sync When Online'}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       {loading && (
         <Card className="border-info bg-info/5">
@@ -408,18 +356,6 @@ export function TaxReports({ reportType, dateRange }: TaxReportsProps) {
           <Button onClick={() => exportTaxData('gstr3b')} variant="outline">
             <Download className="h-4 w-4 mr-2" />
             GSTR-3B
-          </Button>
-          <Button
-            onClick={handleSync}
-            variant="outline"
-            disabled={!isOnline || isSyncing}
-          >
-            {isOnline ? (
-              <Cloud className="h-4 w-4 mr-2" />
-            ) : (
-              <Database className="h-4 w-4 mr-2" />
-            )}
-            {isSyncing ? 'Syncing...' : isOnline ? 'Sync to Cloud' : 'Offline Mode'}
           </Button>
         </div>
         

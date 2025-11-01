@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { dbGetAll, dbPut, dbDelete } from "@/lib/indexeddb";
 import { BulkUpload } from "@/components/common/BulkUpload";
+import { getCurrentUserId, filterByUserId } from "@/lib/userUtils";
 
 interface Service {
   id: string;
@@ -60,12 +61,16 @@ export function AppointmentBooking() {
   useEffect(() => {
     const loadData = async () => {
       try {
+        const userId = await getCurrentUserId();
         const [apts, svcs] = await Promise.all([
           dbGetAll<Appointment>('appointments'),
           dbGetAll<Service>('services')
         ]);
-        setAppointments(apts || []);
-        setServices(svcs || []);
+        // Filter by userId
+        const userApts = userId ? filterByUserId(apts || [], userId) : apts || [];
+        const userSvcs = userId ? filterByUserId(svcs || [], userId) : svcs || [];
+        setAppointments(userApts);
+        setServices(userSvcs);
       } catch (error) {
         console.error('Error loading appointment data:', error);
         toast({
@@ -90,11 +95,22 @@ export function AppointmentBooking() {
 
   const handleBookAppointment = async (appointmentData: Omit<Appointment, 'id' | 'status' | 'googleEventId'>) => {
     try {
+      const userId = await getCurrentUserId();
+      if (!userId) {
+        toast({
+          title: "Error",
+          description: "Please log in to book appointments",
+          variant: "destructive"
+        });
+        return;
+      }
+
       const newAppointment: Appointment = {
         ...appointmentData,
         id: `apt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         status: "scheduled",
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        userId: userId as any // Add userId for data isolation
       };
 
       // Save to IndexedDB

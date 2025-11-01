@@ -21,9 +21,6 @@ import {
 } from "lucide-react";
 import { formatIndianCurrency } from "@/lib/indian-tax-utils";
 import { toast } from "@/hooks/use-toast";
-import { triggerSync, getSyncStatus } from "@/lib/syncService";
-import { getSyncQueue } from "@/lib/syncManager";
-import { SyncStatus } from "@/components/common/SyncStatus";
 
 interface AdminDashboardProps {
   onLogout: () => void;
@@ -47,27 +44,9 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
     offlineDataSize: '0 MB',
     lastSync: 'Never'
   });
-  // Default to online - app works offline-first, so assume online unless definitely offline
-  const [isOnline, setIsOnline] = useState(() => navigator.onLine !== false);
-  const [isSyncing, setIsSyncing] = useState(false);
-
   useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-
-    // Update status based on navigator (optimistic)
-    setIsOnline(navigator.onLine !== false);
-
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-
     // Load stats from localStorage/IndexedDB
     loadSystemStats();
-
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
   }, []);
 
   const loadSystemStats = async () => {
@@ -100,38 +79,6 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
     }
   };
 
-  const handleSync = async () => {
-    setIsSyncing(true);
-    try {
-      const result = await triggerSync();
-      
-      if (result.success) {
-        const syncStatus = await getSyncStatus();
-        setStats(prev => ({
-          ...prev,
-          lastSync: syncStatus.lastSyncTime 
-            ? new Date(syncStatus.lastSyncTime).toLocaleString('en-IN')
-            : 'Never'
-        }));
-        
-        toast({
-          title: "Sync Complete",
-          description: "All offline data has been synchronized",
-        });
-        await loadSystemStats();
-      } else {
-        throw new Error(result.error || 'Sync failed');
-      }
-    } catch (error) {
-      toast({
-        title: "Sync Failed",
-        description: error instanceof Error ? error.message : "Unable to sync data. Will retry automatically.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsSyncing(false);
-    }
-  };
 
   const exportAllData = () => {
     const allData = {
@@ -184,29 +131,9 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
           <div className="flex items-center gap-2">
             <Shield className="h-6 w-6 text-primary" />
             <h1 className="text-xl font-semibold">Admin Panel</h1>
-            {isOnline ? (
-              <Badge variant="default" className="gap-1">
-                <Wifi className="h-3 w-3" />
-                Online
-              </Badge>
-            ) : (
-              <Badge variant="secondary" className="gap-1">
-                <WifiOff className="h-3 w-3" />
-                Offline
-              </Badge>
-            )}
           </div>
           
           <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleSync}
-              disabled={!isOnline || isSyncing}
-            >
-              <RotateCcw className={`h-4 w-4 mr-2 ${isSyncing ? 'animate-spin' : ''}`} />
-              {isSyncing ? 'Syncing...' : 'Sync Data'}
-            </Button>
             <Button variant="outline" size="sm" onClick={onLogout}>
               <LogOut className="h-4 w-4 mr-2" />
               Logout
@@ -290,16 +217,9 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
                       <span>Last Sync:</span>
                       <span className="font-medium">{stats.lastSync}</span>
                     </div>
-                    <div className="flex justify-between">
-                      <span>Connection Status:</span>
-                      <Badge variant={isOnline ? "default" : "secondary"}>
-                        {isOnline ? "Online" : "Offline"}
-                      </Badge>
-                    </div>
                   </div>
                   
                   <div className="space-y-4">
-                    <SyncStatus compact />
                     <Button onClick={exportAllData} className="w-full">
                       <Download className="h-4 w-4 mr-2" />
                       Export All Data
@@ -335,14 +255,6 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
                       Refresh Stats
                     </Button>
                     
-                    <Button 
-                      variant="outline"
-                      onClick={handleSync}
-                      disabled={!isOnline || isSyncing}
-                    >
-                      <RotateCcw className={`h-4 w-4 mr-2 ${isSyncing ? 'animate-spin' : ''}`} />
-                      Force Sync
-                    </Button>
                   </div>
                 </div>
               </CardContent>

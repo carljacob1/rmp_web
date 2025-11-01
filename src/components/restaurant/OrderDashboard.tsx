@@ -19,7 +19,6 @@ interface Order {
 }
 
 import { dbGetAll, dbPut } from "@/lib/indexeddb";
-import { fetchAll, syncProductsToLocal } from "@/lib/sync";
 
 export function OrderDashboard() {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -28,20 +27,16 @@ export function OrderDashboard() {
   
   useEffect(() => {
     (async () => {
-      try {
-        // Pull latest from Supabase if available
-        const [remoteOrders] = await Promise.all([
-          fetchAll<Order>('orders').catch(() => []),
-          syncProductsToLocal().catch(() => {})
-        ]);
-        for (const ro of remoteOrders) await dbPut('orders', ro);
-      } catch {}
+      const userId = await getCurrentUserId();
       const [ordersFromDb, products] = await Promise.all([
         dbGetAll<Order>('orders'),
         dbGetAll<any>('products')
       ]);
-      setOrders(ordersFromDb);
-      setMenuItems(products.map((p) => ({ name: p.name, price: p.price, category: p.category })));
+      // Filter by userId
+      const userOrders = userId ? filterByUserId(ordersFromDb, userId) : ordersFromDb;
+      const userProducts = userId ? filterByUserId(products, userId) : products;
+      setOrders(userOrders);
+      setMenuItems(userProducts.map((p) => ({ name: p.name, price: p.price, category: p.category })));
     })();
   }, []);
   

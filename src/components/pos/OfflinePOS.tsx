@@ -1,16 +1,17 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
+import { BrowserMultiFormatReader } from '@zxing/library';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
-import { X, Plus, Minus, ShoppingCart, CreditCard, ArrowLeft, Calculator, QrCode, Smartphone, Banknote, CheckCircle } from 'lucide-react';
+import { X, Plus, Minus, ShoppingCart, CreditCard, ArrowLeft, Calculator, QrCode, Smartphone, Banknote, CheckCircle, AlertTriangle, ScanLine, Camera, CameraOff, Package } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useOfflineStorage } from '@/hooks/useOfflineStorage';
 import { dbGetAll, dbPut, dbGetById } from '@/lib/indexeddb';
-import { upsertOne } from '@/lib/sync';
+import { getCurrentUserId, filterByUserId } from '@/lib/userUtils';
 
 interface CartItem {
   id: string;
@@ -19,6 +20,7 @@ interface CartItem {
   quantity: number;
   category: string;
   productId?: string; // Store product ID for stock updates
+  image?: string; // Product image
 }
 
 interface CustomerInfo {
@@ -36,6 +38,7 @@ interface CategoryRec { id: string; name: string; }
 interface ProductRec { 
   id: string; 
   name: string; 
+  sku?: string; // SKU/Barcode for scanning
   price: number; 
   category: string;
   stock?: number; // Stock/quantity available
@@ -46,14 +49,21 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
   const [categories, setCategories] = useState<CategoryRec[]>([]);
   const [products, setProducts] = useState<ProductRec[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>('');
+  const [barcodeInput, setBarcodeInput] = useState('');
+  const [showCameraScanner, setShowCameraScanner] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const codeReaderRef = useRef<BrowserMultiFormatReader | null>(null);
   const [customItemName, setCustomItemName] = useState('');
   const [customItemPrice, setCustomItemPrice] = useState('');
+  const [customItemBarcode, setCustomItemBarcode] = useState('');
   const [customerInfo, setCustomerInfo] = useState<CustomerInfo>({ name: '', phone: '', email: '' });
   const [showPayment, setShowPayment] = useState(false);
   const [showKeypad, setShowKeypad] = useState(false);
   const [keypadValue, setKeypadValue] = useState('');
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<'cash' | 'upi' | 'card' | null>(null);
-  const [upiId, setUpiId] = useState('');
+  const [upiId, setUpiId] = useState(''); // Customer UPI ID (for payment requests)
+  const [merchantUPI, setMerchantUPI] = useState(''); // Merchant UPI ID (for QR code)
   const [paymentStatus, setPaymentStatus] = useState<'pending' | 'processing' | 'completed' | null>(null);
   const [taxRate, setTaxRate] = useState<number>(18); // Default 18% GST, customizable
   const { toast } = useToast();
@@ -62,8 +72,16 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
   // Function to reload products from IndexedDB
   const reloadProducts = async () => {
     try {
+      const userId = await getCurrentUserId();
       const prods = await dbGetAll<ProductRec>('products');
-      setProducts(prods);
+      // Filter by userId to show only current user's products
+      const userProds = userId ? filterByUserId(prods, userId) : prods;
+      // Normalize product data to ensure SKU field is accessible
+      const normalizedProds = userProds.map(p => ({
+        ...p,
+        sku: p.sku || (p as any).sku || (p as any).SKU || (p as any).skucode || '',
+      }));
+      setProducts(normalizedProds);
     } catch (error) {
       console.error('Error reloading products:', error);
     }
@@ -71,42 +89,298 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
 
   useEffect(() => {
     (async () => {
-      const [cats, prods] = await Promise.all([
+      const userId = await getCurrentUserId();
+      const [cats, prods, settings] = await Promise.all([
         dbGetAll<CategoryRec>('categories'),
-        dbGetAll<ProductRec>('products')
+        dbGetAll<ProductRec>('products'),
+        dbGetAll<any>('settings')
       ]);
-      const sortedCats = cats.sort((a, b) => a.name.localeCompare(b.name));
+      // Filter by userId
+      const userCats = userId ? filterByUserId(cats, userId) : cats;
+      const userProds = userId ? filterByUserId(prods, userId) : prods;
+      const sortedCats = userCats.sort((a, b) => a.name.localeCompare(b.name));
       setCategories(sortedCats);
-      setProducts(prods);
+      // Normalize product data to ensure SKU field is accessible
+      const normalizedProds = userProds.map(p => ({
+        ...p,
+        sku: p.sku || (p as any).sku || (p as any).SKU || (p as any).skucode || '',
+      }));
+      setProducts(normalizedProds);
       // Default to showing all products (no category filter)
       setSelectedCategory('');
+      
+      // Load merchant UPI ID from settings
+      if (settings && settings.length > 0) {
+        const setting = settings[0];
+        const settingData = setting.data || setting;
+        const merchantUpiId = settingData.merchantUPI || settingData.merchantupi || settingData.upiId || settingData.upiid || '';
+        if (merchantUpiId) {
+          setMerchantUPI(merchantUpiId);
+        }
+      }
     })();
   }, [businessType]);
 
-  const addToCart = (name: string, price: number, category: string, productId?: string) => {
-    const existingItem = cart.find(item => item.name === name);
+  const addToCart = (name: string, price: number, category: string, productId?: string, image?: string) => {
+    console.log('addToCart called:', { name, price, category, productId, image, currentCartSize: cart.length });
     
-    if (existingItem) {
-      setCart(cart.map(item =>
-        item.name === name 
-          ? { ...item, quantity: item.quantity + 1, productId: productId || item.productId }
-          : item
-      ));
-    } else {
-      const newItem: CartItem = {
-        id: `item_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        name,
-        price,
-        quantity: 1,
-        category,
-        productId
-      };
-      setCart([...cart, newItem]);
-    }
+    setCart(prevCart => {
+      const existingItem = prevCart.find(item => item.name === name);
+      
+      if (existingItem) {
+        const updated = prevCart.map(item =>
+          item.name === name 
+            ? { ...item, quantity: item.quantity + 1, productId: productId || item.productId, image: image || item.image }
+            : item
+        );
+        console.log('Updated existing item in cart. New cart:', updated);
+        return updated;
+      } else {
+        const newItem: CartItem = {
+          id: `item_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          name,
+          price,
+          quantity: 1,
+          category,
+          productId,
+          image
+        };
+        const updated = [...prevCart, newItem];
+        console.log('Added new item to cart. New cart:', updated);
+        return updated;
+      }
+    });
     
     setCustomItemName('');
     setCustomItemPrice('');
+    setBarcodeInput('');
   };
+
+  // Search product by SKU/Barcode
+  const findProductByBarcode = (barcode: string): ProductRec | null => {
+    if (!barcode || !barcode.trim()) return null;
+    const barcodeLower = barcode.trim().toLowerCase();
+    const barcodeValue = barcode.trim();
+    
+    return products.find(p => {
+      // Try to get SKU from various possible field names (case-insensitive)
+      const sku = (p.sku || (p as any).sku || (p as any).SKU || '').toString().trim();
+      const productId = (p.id || '').toString().trim();
+      
+      // Match by exact SKU (case-insensitive)
+      if (sku && sku.toLowerCase() === barcodeLower) {
+        return true;
+      }
+      
+      // Match by product ID (if barcode matches product ID)
+      if (productId && productId.toLowerCase() === barcodeLower) {
+        return true;
+      }
+      
+      // Match by product name (exact match, case-insensitive)
+      if (p.name && p.name.toLowerCase() === barcodeLower) {
+        return true;
+      }
+      
+      // Match by partial name (for flexible searching)
+      if (p.name && p.name.toLowerCase().includes(barcodeLower) && barcodeLower.length >= 3) {
+        return true;
+      }
+      
+      return false;
+    }) || null;
+  };
+
+  // Save barcode to product if missing
+  const saveBarcodeToProduct = async (product: ProductRec, barcode: string) => {
+    try {
+      // Normalize keys before saving
+      const { forceAllKeysToLowercase } = await import('@/lib/keyNormalizer');
+      const now = new Date().toISOString();
+      
+      const updatedProduct = {
+        ...product,
+        sku: barcode.trim(),
+        updated_at: now
+      };
+      
+      const normalized = forceAllKeysToLowercase(updatedProduct);
+      await dbPut('products', normalized);
+      
+      // Reload products to reflect the change
+      await reloadProducts();
+    } catch (error) {
+      console.error('Error saving barcode to product:', error);
+    }
+  };
+
+  // Handle barcode scan (Enter key or fast input)
+  const handleBarcodeScan = async (value: string) => {
+    if (!value || !value.trim()) {
+      return;
+    }
+    
+    const barcodeValue = value.trim();
+    console.log('Scanning barcode:', barcodeValue, 'Total products:', products.length);
+    
+    const product = findProductByBarcode(barcodeValue);
+    
+    if (product) {
+      console.log('Product found:', product.name, 'Price:', product.price, 'SKU:', product.sku);
+      
+      // If product doesn't have SKU/barcode, save it
+      const currentSku = product.sku || (product as any).sku || '';
+      if (!currentSku || currentSku.trim() === '') {
+        await saveBarcodeToProduct(product, barcodeValue);
+        toast({
+          title: "Barcode Saved",
+          description: `Barcode saved to ${product.name}`,
+        });
+        // Reload products to get updated product with SKU
+        await reloadProducts();
+      }
+      
+      // Check stock
+      const stock = product.stock ?? (product as any).stock;
+      if (stock !== undefined && stock <= 0) {
+        toast({
+          title: "Out of Stock",
+          description: `${product.name} is out of stock`,
+          variant: "destructive"
+        });
+        setBarcodeInput('');
+        if (showCameraScanner) stopCameraScanner();
+        return;
+      }
+      
+      const categoryObj = categories.find(c => c.id === product.category || c.name === product.category);
+      const catName = categoryObj?.name || product.category || 'General';
+      
+      // Ensure price is valid
+      const productPrice = product.price || (product as any).price || 0;
+      if (productPrice <= 0) {
+        toast({
+          title: "Invalid Price",
+          description: `${product.name} has invalid price. Please set price before adding to cart.`,
+          variant: "destructive"
+        });
+        return;
+      }
+      
+      console.log('Adding to cart:', product.name, 'Price:', productPrice);
+      const productImage = (product as any).image || '';
+      addToCart(product.name, productPrice, catName, product.id, productImage);
+      
+      toast({
+        title: "Item Added to Cart",
+        description: `${product.name} (₹${productPrice.toFixed(2)}) added to cart successfully`,
+      });
+      
+      // Stop camera scanner after successful scan (with delay to allow toast)
+      if (showCameraScanner) {
+        setTimeout(() => {
+          stopCameraScanner();
+        }, 1000);
+      }
+    } else {
+      console.log('Product not found. Available products:', products.map(p => ({ 
+        name: p.name, 
+        sku: p.sku || (p as any).sku || 'NO SKU',
+        id: p.id 
+      })));
+      toast({
+        title: "Product Not Found",
+        description: `No product found with barcode/SKU: "${barcodeValue}". Try scanning the product name or ensure the product has a SKU set.`,
+        variant: "destructive"
+      });
+    }
+  };
+
+  // Handle barcode input with auto-submit on Enter
+  const handleBarcodeInputChange = (value: string) => {
+    setBarcodeInput(value);
+  };
+
+  const handleBarcodeKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && barcodeInput.trim()) {
+      e.preventDefault();
+      handleBarcodeScan(barcodeInput);
+    }
+  };
+
+  // Camera scanner functions
+  const startCameraScanner = async () => {
+    try {
+      setIsScanning(true);
+      const codeReader = new BrowserMultiFormatReader();
+      codeReaderRef.current = codeReader;
+
+      // Get available video devices
+      const videoInputDevices = await codeReader.listVideoInputDevices();
+      
+      if (videoInputDevices.length === 0) {
+        toast({
+          title: "No Camera Found",
+          description: "Please connect a camera device",
+          variant: "destructive"
+        });
+        setIsScanning(false);
+        return;
+      }
+
+      // Use the first available camera (usually the default)
+      const selectedDeviceId = videoInputDevices[0].deviceId;
+
+      if (videoRef.current) {
+        codeReader.decodeFromVideoDevice(selectedDeviceId, videoRef.current, (result, error) => {
+          if (result) {
+            const barcodeValue = result.getText();
+            handleBarcodeScan(barcodeValue);
+          }
+          if (error && error.name !== 'NotFoundException') {
+            // NotFoundException is normal when no barcode is visible
+            // Only log other errors
+            console.debug('Scanning...', error.name);
+          }
+        });
+      }
+    } catch (error) {
+      console.error('Error starting camera scanner:', error);
+      toast({
+        title: "Camera Error",
+        description: "Failed to access camera. Please check permissions.",
+        variant: "destructive"
+      });
+      setIsScanning(false);
+      setShowCameraScanner(false);
+    }
+  };
+
+  const stopCameraScanner = () => {
+    if (codeReaderRef.current) {
+      codeReaderRef.current.reset();
+      codeReaderRef.current = null;
+    }
+    setIsScanning(false);
+    setShowCameraScanner(false);
+  };
+
+  // Cleanup camera on unmount or when closing scanner
+  useEffect(() => {
+    return () => {
+      stopCameraScanner();
+    };
+  }, []);
+
+  // Start/stop camera when showCameraScanner changes
+  useEffect(() => {
+    if (showCameraScanner && !isScanning) {
+      startCameraScanner();
+    } else if (!showCameraScanner && isScanning) {
+      stopCameraScanner();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showCameraScanner]);
 
   const updateQuantity = (itemId: string, change: number) => {
     setCart(cart.map(item => {
@@ -202,7 +476,6 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
     try {
       // Save order
       await saveData(orderData);
-      try { await upsertOne('orders', orderData as any); } catch {}
       
       // Update product stock for each item in cart
       for (const cartItem of cart) {
@@ -216,12 +489,15 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
               const newStock = Math.max(0, currentStock - cartItem.quantity);
               
               // Update product with new stock
+              const now = new Date().toISOString();
               const updatedProduct = {
                 ...product,
-                stock: newStock
+                stock: newStock,
+                updated_at: now
               };
               
               await dbPut('products', updatedProduct);
+              // Sync functionality removed - data stored only in IndexedDB
             }
           } catch (error) {
             console.error(`Failed to update stock for product ${cartItem.productId}:`, error);
@@ -236,12 +512,15 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
               const currentStock = product.stock || 0;
               const newStock = Math.max(0, currentStock - cartItem.quantity);
               
+              const now = new Date().toISOString();
               const updatedProduct = {
                 ...product,
-                stock: newStock
+                stock: newStock,
+                updated_at: now
               };
               
               await dbPut('products', updatedProduct);
+              // Sync functionality removed - data stored only in IndexedDB
             }
           } catch (error) {
             console.error(`Failed to update stock for custom item ${cartItem.name}:`, error);
@@ -286,14 +565,19 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
   const upiQRCodeData = useMemo(() => {
     // UPI QR code format: upi://pay?pa=<UPI_ID>&pn=<Payee Name>&am=<Amount>&cu=INR&tn=<Transaction Note>
     // This should be the MERCHANT's UPI ID where customers send payments
-    // TODO: Load from settings or business profile
-    const merchantUPI = 'merchant@paytm'; // Replace with actual merchant UPI from settings
-    const merchantName = 'RetailPro Merchant'; // Replace with actual merchant name
+    const merchantUpiId = merchantUPI || '';
+    
+    if (!merchantUpiId) {
+      // Return empty string if no merchant UPI is set - QR code won't work
+      return '';
+    }
+    
+    const merchantName = 'RetailPro Merchant'; // Can be loaded from settings later
     const amount = total.toFixed(2);
     const transactionNote = `Payment for ${businessType} order`;
     
-    return `upi://pay?pa=${encodeURIComponent(merchantUPI)}&pn=${encodeURIComponent(merchantName)}&am=${amount}&cu=INR&tn=${encodeURIComponent(transactionNote)}`;
-  }, [total, businessType]);
+    return `upi://pay?pa=${encodeURIComponent(merchantUpiId)}&pn=${encodeURIComponent(merchantName)}&am=${amount}&cu=INR&tn=${encodeURIComponent(transactionNote)}`;
+  }, [total, businessType, merchantUPI]);
 
   // Keypad Component
   const Keypad = () => (
@@ -507,6 +791,19 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
                   <Card className="bg-primary/5 border-primary/20">
                     <CardContent className="pt-6 space-y-4">
                       <div>
+                        <label className="text-sm font-medium mb-2 block">Merchant UPI ID (Required for QR Code)</label>
+                        <Input
+                          placeholder="Your business UPI ID (e.g., yourbusiness@paytm)"
+                          value={merchantUPI}
+                          onChange={(e) => setMerchantUPI(e.target.value)}
+                          className="mb-2"
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Enter your business UPI ID to generate a working payment QR code. Customers will scan and pay to this UPI ID.
+                        </p>
+                      </div>
+
+                      <div>
                         <label className="text-sm font-medium mb-2 block">Customer UPI ID (Optional)</label>
                         <Input
                           placeholder="Customer's UPI ID for payment request (optional)"
@@ -525,33 +822,48 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
                           <QrCode className="h-4 w-4" />
                           <span className="text-sm font-medium">Scan QR Code to Pay</span>
                         </div>
-                        <div className="bg-white p-6 rounded-lg border-2 border-primary/20 flex flex-col items-center justify-center">
-                          <div className="bg-white p-3 rounded-lg shadow-lg mb-3">
-                            <QRCodeSVG
-                              value={upiQRCodeData}
-                              size={200}
-                              level="H"
-                              includeMargin={true}
-                              imageSettings={{
-                                src: '',
-                                height: 0,
-                                width: 0,
-                                excavate: false,
-                              }}
-                            />
-                          </div>
-                          <div className="text-center space-y-1">
-                            <p className="text-sm font-medium text-foreground">
-                              Scan with any UPI app
+                        {!merchantUPI ? (
+                          <div className="bg-warning/10 border border-warning rounded-lg p-4 text-center">
+                            <AlertTriangle className="h-5 w-5 text-warning mx-auto mb-2" />
+                            <p className="text-sm font-medium text-warning mb-1">
+                              Merchant UPI ID Required
                             </p>
                             <p className="text-xs text-muted-foreground">
-                              Amount: <span className="font-semibold text-primary">₹{total.toFixed(2)}</span>
-                            </p>
-                            <p className="text-xs text-muted-foreground mt-2">
-                              (GPay, PhonePe, Paytm, BHIM, etc.)
+                              Please enter your business UPI ID above to generate a working payment QR code.
                             </p>
                           </div>
-                        </div>
+                        ) : (
+                          <div className="bg-white p-6 rounded-lg border-2 border-primary/20 flex flex-col items-center justify-center">
+                            <div className="bg-white p-3 rounded-lg shadow-lg mb-3">
+                              <QRCodeSVG
+                                value={upiQRCodeData}
+                                size={200}
+                                level="H"
+                                includeMargin={true}
+                                imageSettings={{
+                                  src: '',
+                                  height: 0,
+                                  width: 0,
+                                  excavate: false,
+                                }}
+                              />
+                            </div>
+                            <div className="text-center space-y-1">
+                              <p className="text-sm font-medium text-foreground">
+                                Scan with any UPI app
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                Amount: <span className="font-semibold text-primary">₹{total.toFixed(2)}</span>
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                Merchant UPI: <span className="font-semibold">{merchantUPI}</span>
+                              </p>
+                              <p className="text-xs text-muted-foreground mt-2">
+                                (GPay, PhonePe, Paytm, BHIM, etc.)
+                              </p>
+                            </div>
+                          </div>
+                        )}
                       </div>
 
                       {/* UPI Payment Status */}
@@ -735,47 +1047,214 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
             ))}
           </div>
 
-          {/* Quick Add Custom Item */}
+          {/* Barcode Scanner */}
           <Card className="mb-6">
             <CardHeader>
-              <CardTitle>Quick Add Item</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex gap-2">
-                <Input
-                  placeholder="Item name"
-                  value={customItemName}
-                  onChange={(e) => setCustomItemName(e.target.value)}
-                  className="flex-1"
-                />
-                <div className="flex gap-1">
-                  <Input
-                    placeholder="Price"
-                    value={customItemPrice}
-                    onChange={(e) => setCustomItemPrice(e.target.value)}
-                    type="number"
-                    className="w-24"
-                    readOnly
-                  />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                onClick={() => setShowKeypad(true)}
-                    className="px-2"
-                  >
-                    <Calculator className="h-4 w-4" />
-                  </Button>
+              <CardTitle className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <ScanLine className="h-5 w-5" />
+                  Barcode Scanner
                 </div>
                 <Button
+                  variant={showCameraScanner ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setShowCameraScanner(!showCameraScanner)}
+                >
+                  {showCameraScanner ? (
+                    <>
+                      <CameraOff className="h-4 w-4 mr-2" />
+                      Stop Camera
+                    </>
+                  ) : (
+                    <>
+                      <Camera className="h-4 w-4 mr-2" />
+                      Use Camera
+                    </>
+                  )}
+                </Button>
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {/* Camera Scanner */}
+              {showCameraScanner && (
+                <div className="mb-4">
+                  <div className="relative bg-black rounded-lg overflow-hidden">
+                    <video
+                      ref={videoRef}
+                      className="w-full max-h-64 object-cover"
+                      playsInline
+                      muted
+                    />
+                    {!isScanning && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+                        <div className="text-center text-white">
+                          <Camera className="h-8 w-8 mx-auto mb-2 animate-pulse" />
+                          <p>Starting camera...</p>
+                        </div>
+                      </div>
+                    )}
+                    {isScanning && (
+                      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                        <div className="border-2 border-green-500 rounded-lg w-64 h-32 relative">
+                          <div className="absolute top-0 left-0 w-6 h-6 border-t-2 border-l-2 border-green-500"></div>
+                          <div className="absolute top-0 right-0 w-6 h-6 border-t-2 border-r-2 border-green-500"></div>
+                          <div className="absolute bottom-0 left-0 w-6 h-6 border-b-2 border-l-2 border-green-500"></div>
+                          <div className="absolute bottom-0 right-0 w-6 h-6 border-b-2 border-r-2 border-green-500"></div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-2 text-center">
+                    Position barcode within the frame to scan automatically
+                  </p>
+                </div>
+              )}
+
+              {/* Manual Input Scanner */}
+              <div className="flex gap-2">
+                <Input
+                  placeholder="Scan barcode or enter SKU (Press Enter)"
+                  value={barcodeInput}
+                  onChange={(e) => handleBarcodeInputChange(e.target.value)}
+                  onKeyDown={handleBarcodeKeyDown}
+                  className="flex-1 text-lg"
+                  autoFocus={!showCameraScanner}
+                  onFocus={(e) => e.target.select()}
+                  disabled={showCameraScanner}
+                />
+                <Button
                   onClick={() => {
-                    const price = parseFloat(customItemPrice);
-                    if (customItemName.trim() && !isNaN(price) && price > 0) {
-                  const catName = categories.find(c => c.id === selectedCategory)?.name || 'General';
-                  addToCart(customItemName.trim(), price, catName);
+                    if (barcodeInput.trim()) {
+                      handleBarcodeScan(barcodeInput);
                     }
                   }}
+                  disabled={!barcodeInput.trim() || showCameraScanner}
+                  className="min-w-[100px]"
                 >
-                  <Plus className="h-4 w-4" />
+                  <ScanLine className="h-4 w-4 mr-2" />
+                  Scan
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground mt-2">
+                {showCameraScanner 
+                  ? "Camera scanner is active. Point camera at barcode to scan automatically."
+                  : "Scan a barcode using a barcode scanner device, or type the product SKU and press Enter to add to cart. Scanned barcodes will be saved to products automatically."}
+              </p>
+            </CardContent>
+          </Card>
+
+          {/* Quick Add Custom Item */}
+          <Card className="mb-6 border-2 shadow-sm">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-lg font-semibold flex items-center gap-2">
+                <Plus className="h-5 w-5 text-primary" />
+                Quick Add Item
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <Input
+                    placeholder="Item name *"
+                    value={customItemName}
+                    onChange={(e) => setCustomItemName(e.target.value)}
+                    className="flex-1"
+                  />
+                  <Input
+                    placeholder="Barcode/SKU"
+                    value={customItemBarcode}
+                    onChange={(e) => setCustomItemBarcode(e.target.value)}
+                    className="flex-1"
+                  />
+                  <div className="flex gap-1">
+                    <Input
+                      placeholder="Price *"
+                      value={customItemPrice}
+                      onChange={(e) => setCustomItemPrice(e.target.value)}
+                      type="number"
+                      step="0.01"
+                      className="flex-1"
+                      readOnly
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowKeypad(true)}
+                      className="px-2 flex-shrink-0"
+                    >
+                      <Calculator className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+                <Button
+                  onClick={async () => {
+                    const price = parseFloat(customItemPrice);
+                    if (customItemName.trim() && !isNaN(price) && price > 0) {
+                      const catName = categories.find(c => c.id === selectedCategory)?.name || 'General';
+                      const categoryId = selectedCategory || categories.find(c => c.name === catName)?.id || '';
+                      
+                      // Save as product to IndexedDB if barcode is provided
+                      if (customItemBarcode.trim()) {
+                        try {
+                          const userId = await getCurrentUserId();
+                          if (!userId) {
+                            toast({
+                              title: "Error",
+                              description: "Please log in to save products",
+                              variant: "destructive"
+                            });
+                            return;
+                          }
+
+                          const productId = `prod_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+                          const now = new Date().toISOString();
+                          
+                          const { forceAllKeysToLowercase } = await import('@/lib/keyNormalizer');
+                          const newProduct = {
+                            id: productId,
+                            name: customItemName.trim(),
+                            sku: customItemBarcode.trim(),
+                            price: price,
+                            category: categoryId || catName,
+                            stock: 0,
+                            lowstockthreshold: 0,
+                            userId: userId, // Add userId for data isolation
+                            created_at: now,
+                            updated_at: now
+                          };
+                          
+                          const normalized = forceAllKeysToLowercase(newProduct);
+                          await dbPut('products', normalized);
+                          await reloadProducts();
+                          
+                          toast({
+                            title: "Product Saved",
+                            description: `"${customItemName.trim()}" saved with barcode "${customItemBarcode.trim()}"`,
+                          });
+                        } catch (error) {
+                          console.error('Error saving product:', error);
+                        }
+                      }
+                      
+                      addToCart(customItemName.trim(), price, catName, undefined, '');
+                      
+                      // Clear form
+                      setCustomItemName('');
+                      setCustomItemPrice('');
+                      setCustomItemBarcode('');
+                    } else {
+                      toast({
+                        title: "Validation Error",
+                        description: "Please enter item name and price",
+                        variant: "destructive"
+                      });
+                    }
+                  }}
+                  className="w-full sm:w-auto"
+                  size="lg"
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add to Cart
                 </Button>
               </div>
             </CardContent>
@@ -799,7 +1278,7 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
                 </CardContent>
               </Card>
             ) : (
-              <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                 {products
                   .filter(p => {
                     // Show all products if no category selected
@@ -812,14 +1291,23 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
                   .map((item) => {
                     const categoryObj = categories.find(c => c.id === item.category || c.name === item.category);
                     const catName = categoryObj?.name || item.category || 'General';
+                    const itemImage = (item as any).image || '';
+                    const isOutOfStock = item.stock !== undefined && item.stock <= 0;
+                    const isLowStock = item.stock !== undefined && item.stock > 0 && item.stock < 5;
                     
                     return (
                       <Card
                         key={item.id}
-                        className="cursor-pointer hover:shadow-md transition-shadow hover:border-primary"
+                        className={`cursor-pointer transition-all duration-200 hover:shadow-lg hover:scale-105 border-2 ${
+                          isOutOfStock 
+                            ? 'opacity-60 border-muted' 
+                            : isLowStock 
+                            ? 'border-yellow-300 hover:border-yellow-400' 
+                            : 'border-border hover:border-primary'
+                        }`}
                         onClick={() => {
                           // Check if item is out of stock
-                          if (item.stock !== undefined && item.stock <= 0) {
+                          if (isOutOfStock) {
                             toast({
                               title: "Out of Stock",
                               description: `${item.name} is out of stock`,
@@ -827,22 +1315,61 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
                             });
                             return;
                           }
-                          addToCart(item.name, item.price, catName, item.id);
+                          const productImage = (item as any).image || '';
+                          addToCart(item.name, item.price, catName, item.id, productImage);
                           toast({
                             title: "Added to Cart",
                             description: `${item.name} added to cart`,
                           });
                         }}
                       >
-                      <CardContent className={`p-4 text-center ${item.stock !== undefined && item.stock <= 0 ? 'opacity-60' : ''}`}>
-                        <h4 className="font-medium text-sm mb-1">{item.name}</h4>
-                        <p className="text-muted-foreground text-xs mb-1">{catName}</p>
-                        <p className="text-primary font-semibold mb-1">₹{item.price.toFixed(2)}</p>
-                        {item.stock !== undefined && (
-                          <p className={`text-xs font-medium ${item.stock === 0 ? 'text-destructive' : item.stock < 5 ? 'text-warning' : 'text-muted-foreground'}`}>
-                            {item.stock === 0 ? 'Out of Stock' : `Stock: ${item.stock}`}
-                          </p>
+                      <CardContent className="p-4">
+                        {/* Product Image */}
+                        {itemImage ? (
+                          <div className="w-full h-32 mb-3 rounded-lg overflow-hidden bg-muted">
+                            <img 
+                              src={itemImage} 
+                              alt={item.name}
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+                        ) : (
+                          <div className="w-full h-32 mb-3 rounded-lg bg-gradient-to-br from-primary/10 to-primary/5 flex items-center justify-center border border-border">
+                            <Package className="h-12 w-12 text-muted-foreground/50" />
+                          </div>
                         )}
+                        
+                        {/* Product Info */}
+                        <div className="space-y-2">
+                          <div>
+                            <h4 className="font-semibold text-base mb-1 line-clamp-2 min-h-[2.5rem]">{item.name}</h4>
+                            {catName && (
+                              <Badge variant="secondary" className="text-xs mb-2">
+                                {catName}
+                              </Badge>
+                            )}
+                          </div>
+                          
+                          <div className="flex items-center justify-between pt-2 border-t">
+                            <div>
+                              <p className="text-lg font-bold text-primary">₹{item.price.toFixed(2)}</p>
+                            </div>
+                            {item.stock !== undefined && (
+                              <Badge 
+                                variant={isOutOfStock ? "destructive" : isLowStock ? "default" : "secondary"}
+                                className="text-xs"
+                              >
+                                {isOutOfStock ? 'Out' : `Stock: ${item.stock}`}
+                              </Badge>
+                            )}
+                          </div>
+                          
+                          {item.sku && (
+                            <p className="text-xs text-muted-foreground font-mono">
+                              SKU: {item.sku}
+                            </p>
+                          )}
+                        </div>
                       </CardContent>
                       </Card>
                     );
@@ -882,45 +1409,69 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
             ) : (
               <div className="space-y-3">
                 {cart.map(item => (
-                  <Card key={item.id}>
-                    <CardContent className="p-4">
-                      <div className="flex justify-between items-start mb-2">
-                        <div className="flex-1">
-                          <h4 className="font-medium">{item.name}</h4>
-                          <p className="text-sm text-muted-foreground">{item.category}</p>
-                          <p className="text-sm">₹{item.price.toFixed(2)} each</p>
+                  <Card key={item.id} className="overflow-hidden">
+                    <CardContent className="p-0">
+                      <div className="flex gap-3 p-4">
+                        {/* Product Image */}
+                        <div className="flex-shrink-0">
+                          {item.image ? (
+                            <div className="w-16 h-16 rounded-lg overflow-hidden bg-muted border">
+                              <img 
+                                src={item.image} 
+                                alt={item.name}
+                                className="w-full h-full object-cover"
+                              />
+                            </div>
+                          ) : (
+                            <div className="w-16 h-16 rounded-lg bg-gradient-to-br from-primary/10 to-primary/5 flex items-center justify-center border border-border">
+                              <Package className="h-6 w-6 text-muted-foreground/50" />
+                            </div>
+                          )}
                         </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => removeFromCart(item.id)}
-                          className="text-destructive hover:text-destructive"
-                        >
-                          <X className="h-4 w-4" />
-                        </Button>
-                      </div>
-                      
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => updateQuantity(item.id, -1)}
-                          >
-                            <Minus className="h-3 w-3" />
-                          </Button>
-                          <span className="w-8 text-center">{item.quantity}</span>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => updateQuantity(item.id, 1)}
-                          >
-                            <Plus className="h-3 w-3" />
-                          </Button>
+                        
+                        {/* Product Info */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex justify-between items-start mb-2">
+                            <div className="flex-1 min-w-0">
+                              <h4 className="font-semibold text-base mb-1 line-clamp-1">{item.name}</h4>
+                              <p className="text-xs text-muted-foreground mb-1">{item.category}</p>
+                              <p className="text-xs text-muted-foreground">₹{item.price.toFixed(2)} each</p>
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => removeFromCart(item.id)}
+                              className="text-destructive hover:text-destructive h-6 w-6 p-0 flex-shrink-0"
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          </div>
+                          
+                          <div className="flex items-center justify-between pt-2 border-t">
+                            <div className="flex items-center gap-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => updateQuantity(item.id, -1)}
+                                className="h-7 w-7 p-0"
+                              >
+                                <Minus className="h-3 w-3" />
+                              </Button>
+                              <span className="w-8 text-center font-medium">{item.quantity}</span>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => updateQuantity(item.id, 1)}
+                                className="h-7 w-7 p-0"
+                              >
+                                <Plus className="h-3 w-3" />
+                              </Button>
+                            </div>
+                            <span className="font-bold text-primary text-base">
+                              ₹{(item.price * item.quantity).toFixed(2)}
+                            </span>
+                          </div>
                         </div>
-                        <span className="font-semibold text-primary">
-                          ₹{(item.price * item.quantity).toFixed(2)}
-                        </span>
                       </div>
                     </CardContent>
                   </Card>

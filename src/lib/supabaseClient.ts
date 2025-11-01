@@ -7,15 +7,11 @@ const anonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_
 
 if (url && anonKey) {
   // Schema configuration:
-  // - Use 'api' if your Supabase only exposes 'api' schema (requires moving tables to api schema)
-  // - Use 'public' if your Supabase exposes 'public' schema (default, easier)
-  // Current: Using 'api' - If you get PGRST205 errors, either:
-  //   1. Run SUPABASE_SCHEMA_FIX.sql to move tables to 'api' schema, OR
-  //   2. Change to 'public' and expose 'public' schema in Supabase Dashboard
+  // - Using 'api' schema - tables are created in api schema for API access
   supabase = createClient(url, anonKey, {
     auth: { persistSession: true },
     global: { headers: { 'x-client-info': 'pos-web' } },
-    db: { schema: 'api' } // Change to 'public' if you expose public schema instead
+    db: { schema: 'api' } // API schema - matches supabase_migration_api.sql
   });
 } else {
   // eslint-disable-next-line no-console
