@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -57,6 +57,7 @@ interface EmployeeSummary {
 
 const PAYROLL_STORAGE_KEY = 'payroll_data';
 
+// Export EmployeeReports component
 export function EmployeeReports({ reportType, dateRange }: EmployeeReportsProps) {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [payrollEntries, setPayrollEntries] = useState<PayrollEntry[]>([]);

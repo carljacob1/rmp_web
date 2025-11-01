@@ -12,6 +12,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useOfflineStorage } from '@/hooks/useOfflineStorage';
 import { dbGetAll, dbPut, dbGetById } from '@/lib/indexeddb';
 import { getCurrentUserId, filterByUserId } from '@/lib/userUtils';
+import { createTransaction } from '@/lib/transactionUtils';
 
 interface CartItem {
   id: string;
@@ -460,21 +461,57 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
     }
 
     const totals = calculateTotals();
-    const orderData = {
-      id: `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      businessType,
-      items: cart,
-      customer: customerInfo,
-      ...totals,
-      paymentMethod: selectedPaymentMethod,
-      upiId: selectedPaymentMethod === 'upi' ? upiId : undefined,
-      paymentStatus: 'completed',
-      timestamp: new Date().toISOString(),
-      status: 'completed'
+    const now = new Date().toISOString();
+    
+    // Prepare transaction data using new schema
+    const transactionData = {
+      location_id: undefined, // Will be set from first location if available
+      customer_name: customerInfo.name || undefined,
+      customer_phone: customerInfo.phone || undefined,
+      customer_email: customerInfo.email || undefined,
+      subtotal: totals.subtotal,
+      discount_amount: 0,
+      total_tax: totals.tax,
+      total: totals.total,
+      payment_method: selectedPaymentMethod!,
+      payment_status: 'completed',
+      upi_id: selectedPaymentMethod === 'upi' ? upiId : undefined,
+      business_type: businessType,
+      receipt_data: {
+        businessType,
+        timestamp: now,
+        status: 'completed'
+      }
     };
 
+    // Prepare transaction items
+    const transactionItems = cart.map((cartItem) => ({
+      product_id: cartItem.productId,
+      item_name: cartItem.name,
+      item_type: cartItem.category,
+      quantity: cartItem.quantity,
+      price: cartItem.price,
+      tax_amount: (cartItem.price * cartItem.quantity) * (taxRate / 100),
+      total: cartItem.price * cartItem.quantity
+    }));
+
     try {
-      // Save order
+      // Create transaction using new schema structure
+      const { transactionId } = await createTransaction(transactionData, transactionItems);
+      
+      // Legacy: Also save to orders for backward compatibility
+      const orderData = {
+        id: transactionId,
+        businessType,
+        items: cart,
+        customer: customerInfo,
+        ...totals,
+        paymentMethod: selectedPaymentMethod,
+        upiId: selectedPaymentMethod === 'upi' ? upiId : undefined,
+        paymentStatus: 'completed',
+        timestamp: now,
+        status: 'completed'
+      };
       await saveData(orderData);
       
       // Update product stock for each item in cart
@@ -533,12 +570,12 @@ export const OfflinePOS: React.FC<OfflinePOSProps> = ({ businessType, onClose })
       
       // Dispatch custom event to notify other components about stock update
       window.dispatchEvent(new CustomEvent('inventory-updated', { 
-        detail: { orderId: orderData.id } 
+        detail: { transactionId, orderId: transactionId } 
       }));
       
       toast({
         title: "Payment Successful",
-        description: `Order ${orderData.id} completed! Total: ₹${totals.total.toFixed(2)}. Payment via ${selectedPaymentMethod.toUpperCase()}. Inventory updated.`,
+        description: `Transaction ${transactionId.slice(0, 12)}... completed! Total: ₹${totals.total.toFixed(2)}. Payment via ${selectedPaymentMethod?.toUpperCase()}. Inventory updated.`,
       });
 
       // Reset form

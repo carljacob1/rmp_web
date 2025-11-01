@@ -1,28 +1,59 @@
 // Lightweight IndexedDB helper for the app (no external deps)
-// Stores: users, currentUser, registrations, appointments, services, medicines, invoices, expenses, orders, products, settings
+// Comprehensive schema matching supabase_migration_comprehensive.sql
 
 const DB_NAME = 'RetailProDB';
-const DB_VERSION = 7; // Incremented to add payments store
+const DB_VERSION = 8; // Incremented to add comprehensive schema tables
 
 export type StoreName =
+  // Core stores
   | 'users'
   | 'currentUser'
   | 'registrations'
-  | 'appointments'
+  | 'business_settings'
+  | 'locations'
+  | 'categories'
+  | 'products'
+  | 'customers'
+  | 'transactions'
+  | 'transaction_items'
+  | 'tax_rates'
+  | 'employees'
+  | 'attendance'
+  // Restaurant-specific
+  | 'menu_items'
+  | 'modifiers'
+  // Pharmacy-specific
+  | 'patients'
+  | 'prescriptions'
+  | 'service_categories'
+  // Service business
   | 'services'
+  | 'appointments'
+  // Refilling business
+  | 'containers'
+  | 'refill_history'
+  // Open items
+  | 'item_types'
+  | 'open_items'
+  // Multi-business
+  | 'businesses'
+  | 'business_types'
+  // Barcode management
+  | 'barcode_settings'
+  | 'barcode_history'
+  // Reports
+  | 'gst_reports'
+  | 'tax_reports'
+  // Legacy (for backward compatibility)
+  | 'orders'
   | 'medicines'
   | 'invoices'
   | 'expenses'
-  | 'categories'
-  | 'orders'
-  | 'products'
   | 'settings'
-  | 'employees'
-  | 'attendance'
-  | 'syncQueue'
-  | 'locations'
   | 'subscriptions'
-  | 'payments';
+  | 'payments'
+  // Sync
+  | 'syncQueue';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -61,24 +92,55 @@ function openDB(): Promise<IDBDatabase> {
     request.onupgradeneeded = (event) => {
       const db = (event.target as IDBOpenDBRequest).result;
       const stores: StoreName[] = [
+        // Core stores
         'users',
         'currentUser',
         'registrations',
-        'appointments',
+        'business_settings',
+        'locations',
+        'categories',
+        'products',
+        'customers',
+        'transactions',
+        'transaction_items',
+        'tax_rates',
+        'employees',
+        'attendance',
+        // Restaurant-specific
+        'menu_items',
+        'modifiers',
+        // Pharmacy-specific
+        'patients',
+        'prescriptions',
+        'service_categories',
+        // Service business
         'services',
+        'appointments',
+        // Refilling business
+        'containers',
+        'refill_history',
+        // Open items
+        'item_types',
+        'open_items',
+        // Multi-business
+        'businesses',
+        'business_types',
+        // Barcode management
+        'barcode_settings',
+        'barcode_history',
+        // Reports
+        'gst_reports',
+        'tax_reports',
+        // Legacy (for backward compatibility)
+        'orders',
         'medicines',
         'invoices',
         'expenses',
-        'categories',
-        'orders',
-        'products',
         'settings',
-        'employees',
-        'attendance',
-        'syncQueue',
-        'locations',
         'subscriptions',
-        'payments'
+        'payments',
+        // Sync
+        'syncQueue'
       ];
       stores.forEach((name) => {
         if (!db.objectStoreNames.contains(name)) {
@@ -98,24 +160,55 @@ function openDB(): Promise<IDBDatabase> {
       const db = request.result;
       // Verify all required stores exist
       const requiredStores: StoreName[] = [
+        // Core stores
         'users',
         'currentUser',
         'registrations',
-        'appointments',
+        'business_settings',
+        'locations',
+        'categories',
+        'products',
+        'customers',
+        'transactions',
+        'transaction_items',
+        'tax_rates',
+        'employees',
+        'attendance',
+        // Restaurant-specific
+        'menu_items',
+        'modifiers',
+        // Pharmacy-specific
+        'patients',
+        'prescriptions',
+        'service_categories',
+        // Service business
         'services',
+        'appointments',
+        // Refilling business
+        'containers',
+        'refill_history',
+        // Open items
+        'item_types',
+        'open_items',
+        // Multi-business
+        'businesses',
+        'business_types',
+        // Barcode management
+        'barcode_settings',
+        'barcode_history',
+        // Reports
+        'gst_reports',
+        'tax_reports',
+        // Legacy (for backward compatibility)
+        'orders',
         'medicines',
         'invoices',
         'expenses',
-        'categories',
-        'orders',
-        'products',
         'settings',
-        'employees',
-        'attendance',
-        'syncQueue',
-        'locations',
         'subscriptions',
-        'payments'
+        'payments',
+        // Sync
+        'syncQueue'
       ];
       
       const missing = requiredStores.filter(name => !db.objectStoreNames.contains(name));

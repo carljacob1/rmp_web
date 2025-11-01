@@ -3,22 +3,52 @@ import { getSupabaseClient } from './supabaseClient';
 import { syncTable, processSyncQueue, getSyncQueue, subscribeToTable } from './syncManager';
 import { StoreName } from './indexeddb';
 
-// Table to store mapping
+// Table to store mapping - Comprehensive schema matching supabase_migration_comprehensive.sql
 const SYNC_TABLES: Array<{ table: string; store: StoreName }> = [
+  // Core tables
+  { table: 'users', store: 'users' },
+  { table: 'registrations', store: 'registrations' },
+  { table: 'business_settings', store: 'business_settings' },
+  { table: 'locations', store: 'locations' },
   { table: 'categories', store: 'categories' },
   { table: 'products', store: 'products' },
-  { table: 'orders', store: 'orders' },
+  { table: 'customers', store: 'customers' },
+  { table: 'transactions', store: 'transactions' },
+  { table: 'transaction_items', store: 'transaction_items' },
+  { table: 'tax_rates', store: 'tax_rates' },
   { table: 'employees', store: 'employees' },
   { table: 'attendance', store: 'attendance' },
-  { table: 'appointments', store: 'appointments' },
+  // Restaurant-specific
+  { table: 'menu_items', store: 'menu_items' },
+  { table: 'modifiers', store: 'modifiers' },
+  // Pharmacy-specific
+  { table: 'patients', store: 'patients' },
+  { table: 'prescriptions', store: 'prescriptions' },
+  { table: 'service_categories', store: 'service_categories' },
+  // Service business
   { table: 'services', store: 'services' },
+  { table: 'appointments', store: 'appointments' },
+  // Refilling business
+  { table: 'containers', store: 'containers' },
+  { table: 'refill_history', store: 'refill_history' },
+  // Open items
+  { table: 'item_types', store: 'item_types' },
+  { table: 'open_items', store: 'open_items' },
+  // Multi-business
+  { table: 'businesses', store: 'businesses' },
+  { table: 'business_types', store: 'business_types' },
+  // Barcode management
+  { table: 'barcode_settings', store: 'barcode_settings' },
+  { table: 'barcode_history', store: 'barcode_history' },
+  // Reports
+  { table: 'gst_reports', store: 'gst_reports' },
+  { table: 'tax_reports', store: 'tax_reports' },
+  // Legacy (for backward compatibility during migration)
+  { table: 'orders', store: 'orders' },
   { table: 'medicines', store: 'medicines' },
   { table: 'invoices', store: 'invoices' },
   { table: 'expenses', store: 'expenses' },
   { table: 'settings', store: 'settings' },
-  { table: 'users', store: 'users' },
-  { table: 'registrations', store: 'registrations' },
-  { table: 'locations', store: 'locations' },
   { table: 'subscriptions', store: 'subscriptions' },
   { table: 'payments', store: 'payments' }
 ];
@@ -98,10 +128,11 @@ export function startPeriodicSync(intervalMs: number = 30000): void {
         // Quick sync: process queue and sync critical tables
         await processSyncQueue();
         
-        // Sync critical tables frequently (products, orders, categories)
+        // Sync critical tables frequently (products, transactions, categories, customers)
         await syncTable('products', 'products');
-        await syncTable('orders', 'orders');
+        await syncTable('transactions', 'transactions');
         await syncTable('categories', 'categories');
+        await syncTable('customers', 'customers');
       } catch (error) {
         console.error('[Sync Service] Periodic sync error:', error);
       }
