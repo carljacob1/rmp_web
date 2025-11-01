@@ -8,9 +8,10 @@ import { EPRDashboard } from "@/components/healthcare/EPRDashboard";
 import { RefillingDashboard } from "@/components/refilling/RefillingDashboard";
 import { ReportsManager } from "@/components/reports/ReportsManager";
 import { AccountingDashboard } from "@/components/accounting/AccountingDashboard";
+import { OpenItemsDashboard } from "@/components/open-items/OpenItemsDashboard";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { BarChart3, Calculator, LogOut, Store, Calendar, UtensilsCrossed, Heart, Fuel, UserCheck, Settings, CreditCard } from "lucide-react";
+import { BarChart3, Calculator, LogOut, Store, Calendar, UtensilsCrossed, Heart, Fuel, UserCheck, Settings, CreditCard, Package } from "lucide-react";
 import { Settings as SettingsComponent } from "@/components/settings/Settings";
 import { SubscriptionManager } from "@/components/subscription/SubscriptionManager";
 import { getCurrentUser, setCurrentUser as setIndexedDBCurrentUser } from "@/lib/indexeddb";
@@ -32,9 +33,9 @@ const AppPage = () => {
   const [hasMultipleLocations, setHasMultipleLocations] = useState(false);
   
   // Load saved view from localStorage, default to "dashboard"
-  const [currentView, setCurrentView] = useState<"dashboard" | "reports" | "accounting" | "settings" | "subscription">(() => {
+  const [currentView, setCurrentView] = useState<"dashboard" | "reports" | "accounting" | "settings" | "subscription" | "open-items">(() => {
     const saved = localStorage.getItem("currentView");
-    return (saved as "dashboard" | "reports" | "accounting" | "settings" | "subscription") || "dashboard";
+    return (saved as "dashboard" | "reports" | "accounting" | "settings" | "subscription" | "open-items") || "dashboard";
   });
 
   // Load user from localStorage, IndexedDB, or location state
@@ -140,6 +141,9 @@ const AppPage = () => {
     if (currentView === "subscription") {
       return <SubscriptionManager />;
     }
+    if (currentView === "open-items") {
+      return <OpenItemsDashboard />;
+    }
     return renderDashboard();
   };
 
@@ -243,6 +247,19 @@ const AppPage = () => {
               >
                 <Calculator className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-1" />
                 <span className="hidden sm:inline">Accounting</span>
+              </Button>
+              <Button
+                variant={currentView === "open-items" ? "default" : "ghost"}
+                size="sm"
+                className={`h-8 rounded-md px-2 sm:px-3 transition-all duration-200 text-xs sm:text-sm ${
+                  currentView === "open-items" 
+                    ? "bg-white text-blue-700 hover:bg-white/90 shadow-md font-semibold" 
+                    : "text-white hover:bg-white/15 border border-transparent hover:border-white/20"
+                }`}
+                onClick={() => setCurrentView("open-items")}
+              >
+                <Package className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-1" />
+                <span className="hidden sm:inline">Open Items</span>
               </Button>
               <Button
                 variant={currentView === "subscription" ? "default" : "ghost"}

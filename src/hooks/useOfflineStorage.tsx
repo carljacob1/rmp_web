@@ -32,26 +32,57 @@ const KEY_TO_STORE_MAP: Record<string, StoreName> = {
   'refill_transactions': 'orders'
 };
 
-// Map store names to Supabase table names
+// Map store names to Supabase table names - Comprehensive schema
 const STORE_TO_TABLE_MAP: Record<StoreName, string> = {
+  // Core tables
   'users': 'users',
   'currentUser': 'users', // Not synced separately
   'registrations': 'registrations',
-  'appointments': 'appointments',
+  'business_settings': 'business_settings',
+  'locations': 'locations',
+  'categories': 'categories',
+  'products': 'products',
+  'customers': 'customers',
+  'transactions': 'transactions',
+  'transaction_items': 'transaction_items',
+  'tax_rates': 'tax_rates',
+  'employees': 'employees',
+  'attendance': 'attendance',
+  // Restaurant-specific
+  'menu_items': 'menu_items',
+  'modifiers': 'modifiers',
+  // Pharmacy-specific
+  'patients': 'patients',
+  'prescriptions': 'prescriptions',
+  'service_categories': 'service_categories',
+  // Service business
   'services': 'services',
+  'appointments': 'appointments',
+  // Refilling business
+  'containers': 'containers',
+  'refill_history': 'refill_history',
+  // Open items
+  'item_types': 'item_types',
+  'open_items': 'open_items',
+  // Multi-business
+  'businesses': 'businesses',
+  'business_types': 'business_types',
+  // Barcode management
+  'barcode_settings': 'barcode_settings',
+  'barcode_history': 'barcode_history',
+  // Reports
+  'gst_reports': 'gst_reports',
+  'tax_reports': 'tax_reports',
+  // Legacy (for backward compatibility)
+  'orders': 'orders',
   'medicines': 'medicines',
   'invoices': 'invoices',
   'expenses': 'expenses',
-  'categories': 'categories',
-  'orders': 'orders',
-  'products': 'products',
   'settings': 'settings',
-  'employees': 'employees',
-  'attendance': 'attendance',
-  'syncQueue': 'syncQueue', // Not synced
-  'locations': 'locations',
   'subscriptions': 'subscriptions',
-  'payments': 'payments'
+  'payments': 'payments',
+  // Sync
+  'syncQueue': 'syncQueue' // Not synced
 };
 
 export function useOfflineStorage<T extends { id: string; updated_at?: string; created_at?: string }>(

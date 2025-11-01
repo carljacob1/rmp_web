@@ -24,8 +24,11 @@ const SYNC_QUEUE_STORE: StoreName = 'syncQueue';
 
 // Conflict resolution strategy: Last-write-wins using updated_at timestamp
 function resolveConflict(local: any, remote: any): any {
-  const localTime = new Date(local.updated_at || local.created_at || 0).getTime();
-  const remoteTime = new Date(remote.updated_at || remote.created_at || 0).getTime();
+  // Handle both updated_at and last_updated columns
+  const localUpdated = local.updated_at || local.last_updated;
+  const remoteUpdated = remote.updated_at || remote.last_updated;
+  const localTime = new Date(localUpdated || local.created_at || 0).getTime();
+  const remoteTime = new Date(remoteUpdated || remote.created_at || 0).getTime();
   
   // If timestamps are equal, prefer remote (authoritative)
   return remoteTime >= localTime ? remote : local;
@@ -91,7 +94,9 @@ export async function syncFromSupabase(table: string, storeName: StoreName): Pro
 
   try {
     // Query with api schema (configured in supabaseClient)
-    const { data, error } = await sb.from(table).select('*').order('updated_at', { ascending: false });
+    // Try ordering by updated_at first, fallback to last_updated
+    let orderColumn = 'updated_at';
+    const { data, error } = await sb.from(table).select('*').order(orderColumn, { ascending: false });
     
     if (error) {
       // Provide helpful error message for schema issues
@@ -139,12 +144,17 @@ export async function syncFromSupabase(table: string, storeName: StoreName): Pro
     const now = new Date().toISOString();
 
     for (const remoteItem of data) {
-      // Ensure timestamps exist
-      if (!remoteItem.updated_at) remoteItem.updated_at = now;
-      if (!remoteItem.created_at) remoteItem.created_at = now;
+      // Ensure timestamps exist - handle both updated_at and last_updated
+      const timestampSource = remoteItem.updated_at || remoteItem.last_updated || now;
+      remoteItem.updated_at = timestampSource;
+      if (remoteItem.last_updated) remoteItem.last_updated = timestampSource;
+      if (!remoteItem.created_at) remoteItem.created_at = remoteItem.createdat || now;
       
       // Normalize column names from Supabase (lowercase/snake_case) to camelCase for local storage
       const normalizedItem = normalizeFromSupabase(remoteItem);
+      
+      // Ensure normalized item has updated_at
+      normalizedItem.updated_at = timestampSource;
       
       // Merge password from registrations if syncing users
       if (table === 'users' && registrationsMap.size > 0) {
@@ -162,6 +172,11 @@ export async function syncFromSupabase(table: string, storeName: StoreName): Pro
       
       if (localItem) {
         // Resolve conflict if both exist
+        // Ensure both items have updated_at for comparison
+        const localUpdated = localItem.updated_at || localItem.last_updated;
+        const remoteUpdated = normalizedItem.updated_at || normalizedItem.last_updated;
+        if (!localUpdated) localItem.updated_at = localItem.last_updated || localItem.created_at || now;
+        if (!remoteUpdated) normalizedItem.updated_at = normalizedItem.last_updated || normalizedItem.created_at || now;
         const resolved = resolveConflict(localItem, normalizedItem);
         // Preserve password from local if it exists (might be more recent)
         if (localItem.password && !resolved.password) {
@@ -233,16 +248,21 @@ export async function syncToSupabase(table: string, storeName: StoreName): Promi
         preNormalized = forceAllKeysToLowercase(localItem);
       }
       
-      // Ensure timestamps
-      if (!preNormalized.updated_at) preNormalized.updated_at = now;
-      if (!preNormalized.created_at) preNormalized.created_at = now;
+      // Ensure timestamps - handle both updated_at and last_updated
+      const timestampSource = preNormalized.updated_at || preNormalized.last_updated || now;
+      preNormalized.updated_at = timestampSource;
+      preNormalized.last_updated = timestampSource;
+      if (!preNormalized.created_at) preNormalized.created_at = preNormalized.createdat || now;
       
       const remoteItem = remoteMap.get(preNormalized.id);
 
       if (remoteItem) {
         // Check if local is newer or equal (for conflict resolution)
-        const localTime = new Date(preNormalized.updated_at || preNormalized.created_at || 0).getTime();
-        const remoteTime = new Date(remoteItem.updated_at || remoteItem.created_at || 0).getTime();
+        // Handle both updated_at and last_updated columns
+        const localUpdated = preNormalized.updated_at || preNormalized.last_updated;
+        const remoteUpdated = remoteItem.updated_at || remoteItem.last_updated;
+        const localTime = new Date(localUpdated || preNormalized.created_at || 0).getTime();
+        const remoteTime = new Date(remoteUpdated || remoteItem.created_at || 0).getTime();
 
         if (localTime >= remoteTime) {
           // Local is newer or same, push it (use preNormalized which has lowercase keys)
@@ -320,7 +340,107 @@ export async function syncToSupabase(table: string, storeName: StoreName): Promi
         }
       }
       
-      const { error } = await sb.from(table).upsert(verified, { 
+      // Map legacy field names to new schema field names before filtering
+      const fieldMapped = verified.map((item: any) => {
+        const mapped: any = { ...item };
+        
+        // Special handling for users table: map legacy fields to required fields
+        if (table === 'users') {
+          // Map ownername to name (required field)
+          if (mapped.ownername && !mapped.name) {
+            mapped.name = mapped.ownername;
+          }
+          // Map mobile to phone if phone is missing
+          if (mapped.mobile && !mapped.phone) {
+            mapped.phone = mapped.mobile;
+          }
+          // Ensure name is never null (required field)
+          if (!mapped.name) {
+            mapped.name = mapped.ownername || mapped.email || 'Unknown User';
+          }
+          // Set default values for required fields
+          if (!mapped.role) mapped.role = 'user';
+          if (mapped.is_active === undefined) mapped.is_active = true;
+        }
+        
+        // Special handling for locations table
+        if (table === 'locations') {
+          // Map legacy fields if needed
+          if (mapped.createdat && !mapped.created_at) {
+            mapped.created_at = mapped.createdat;
+          }
+        }
+        
+        // Special handling for categories table
+        if (table === 'categories') {
+          if (mapped.createdat && !mapped.created_at) {
+            mapped.created_at = mapped.createdat;
+          }
+        }
+        
+        // Special handling for products table
+        if (table === 'products') {
+          // Map legacy available to is_active
+          if (mapped.available !== undefined && mapped.is_active === undefined) {
+            mapped.is_active = mapped.available;
+          }
+          // Map legacy stock to stock_quantity
+          if (mapped.stock !== undefined && mapped.stock_quantity === undefined) {
+            mapped.stock_quantity = mapped.stock;
+          }
+          // Map legacy image to image_url
+          if (mapped.image && !mapped.image_url) {
+            mapped.image_url = mapped.image;
+          }
+          // Map legacy lowstockthreshold to low_stock_threshold
+          if (mapped.lowstockthreshold !== undefined && mapped.low_stock_threshold === undefined) {
+            mapped.low_stock_threshold = mapped.lowstockthreshold;
+          }
+          if (mapped.createdat && !mapped.created_at) {
+            mapped.created_at = mapped.createdat;
+          }
+        }
+        
+        return mapped;
+      });
+      
+      // Get safe columns for this table - filter to only include columns that exist in verified data
+      const safeCols = SAFE_COLUMNS[table] || [];
+      const verifiedFiltered = fieldMapped.map((item: any) => {
+        const filtered: any = {};
+        
+        // Special handling for users: ensure name is set before filtering
+        if (table === 'users') {
+          // Ensure name exists (required field) - use mapped value or fallback
+          const userName = item.name || item.ownername || item.email || 'Unknown User';
+          item.name = userName; // Set it so it passes the filter check below
+        }
+        
+        // Only include keys that are in SAFE_COLUMNS and actually exist in the item
+        for (const col of safeCols) {
+          // For required fields, always include them (handle null/undefined specially)
+          if (table === 'users' && col === 'name') {
+            // name is required, always include it
+            filtered[col] = item[col] || item.ownername || item.email || 'Unknown User';
+          } else if (col in item && item[col] !== undefined && item[col] !== null) {
+            filtered[col] = item[col];
+          }
+        }
+        
+        // Final safety check for users table
+        if (table === 'users') {
+          if (!filtered.name || filtered.name === null || filtered.name === undefined) {
+            filtered.name = item.ownername || item.email || item.name || 'Unknown User';
+          }
+          // Ensure other required fields have defaults
+          if (!filtered.role) filtered.role = 'user';
+          if (filtered.is_active === undefined) filtered.is_active = true;
+        }
+        
+        return filtered;
+      });
+      
+      const { error } = await sb.from(table).upsert(verifiedFiltered, { 
         onConflict: 'id',
         returning: 'minimal' as any 
       });
@@ -331,9 +451,18 @@ export async function syncToSupabase(table: string, storeName: StoreName): Promi
           console.error('[Sync] Please configure Supabase Dashboard → Settings → API → Exposed Schemas → Add "api"');
         }
         console.error(`[Sync] Supabase error for ${table}:`, error);
-        if (verified.length > 0) {
-          const keys = Object.keys(verified[0]);
-          console.error(`[Sync] Sample data keys:`, keys);
+        if (verifiedFiltered.length > 0) {
+          const keys = Object.keys(verifiedFiltered[0]);
+          const sampleItem = verifiedFiltered[0];
+          console.error(`[Sync] Sample data keys sent:`, keys);
+          console.error(`[Sync] Sample data values:`, Object.fromEntries(keys.map(k => [k, sampleItem[k]])));
+          console.error(`[Sync] Safe columns allowed for ${table}:`, SAFE_COLUMNS[table] || []);
+          
+          // Check for missing required fields
+          if (table === 'users' && !sampleItem.name) {
+            console.error(`[Sync] PROBLEM: Missing required 'name' field for users table`);
+            console.error(`[Sync] Original mapped item:`, fieldMapped[0]);
+          }
           const badKeys = keys.filter(k => k !== k.toLowerCase());
           if (badKeys.length > 0) {
             console.error(`[Sync] PROBLEM: These keys have uppercase:`, badKeys);
@@ -534,6 +663,7 @@ function normalizeFromSupabase(obj: any): any {
     'checkout': 'checkOut',
     'createdat': 'createdAt',
     'updated_at': 'updated_at', // Keep snake_case for timestamps
+    'last_updated': 'updated_at', // Map last_updated to updated_at
     'created_at': 'created_at'  // Keep snake_case for timestamps
   };
   
@@ -548,22 +678,54 @@ function normalizeFromSupabase(obj: any): any {
   return out;
 }
 
-// Helper: Filter columns to safe whitelist
+// Helper: Filter columns to safe whitelist (updated to match actual schema)
 const SAFE_COLUMNS: Record<string, string[]> = {
-  users: ['id','businessid','ownername','email','mobile','createdat','updated_at'],
-  registrations: ['id','ownername','email','mobile','password','businesstype','plan','createdat','updated_at'],
-  settings: ['id','data','created_at','createdat','updated_at'],
-  categories: ['id','name','description','sortorder','created_at','createdat','updated_at'],
-  products: ['id','name','description','price','category','image','available','modifiers','variations','tags','expirydate','stock','lowstockthreshold','created_at','createdat','updated_at'],
+  // Core tables - matches actual schema
+  users: ['id','name','email','phone','role','is_active','businessid','ownername','mobile','created_at','createdat','last_updated','updated_at'],
+  registrations: ['id','ownername','email','mobile','password','businesstype','plan','createdat','updated_at','created_at'],
+  business_settings: ['id','user_id','business_id','name','address','phone','email','website','tax_id','currency','timezone','business_type','plan_type','logo_url','created_at','last_updated','updated_at'],
+  locations: ['id','user_id','business_settings_id','name','address','city','state','pincode','phone','email','is_active','pos_connected','business_type','latitude','longitude','created_at','last_updated','manager','createdat','updated_at'],
+  categories: ['id','location_id','name','description','is_active','created_at','last_updated','sortorder','createdat','updated_at'],
+  products: ['id','location_id','category_id','name','description','price','cost_price','stock_quantity','barcode','sku','unit','image_url','is_active','low_stock_threshold','requires_prescription','preparation_time','duration','created_at','last_updated','category','image','available','stock','lowstockthreshold','expirydate','modifiers','variations','tags','createdat','updated_at'],
+  customers: ['id','location_id','name','email','phone','address','city','state','pincode','loyalty_points','total_spent','last_visit','notes','created_at','last_updated','updated_at'],
+  transactions: ['id','location_id','customer_id','user_id','receipt_number','transaction_id','subtotal','discount_amount','discount_type','total_tax','platform_fee','total','payment_method','payment_status','upi_id','upi_app','upi_transaction_id','upi_reference','cash_amount','change_amount','card_transaction_id','nfc_upi_id','customer_name','customer_phone','store_name','store_address','cashier','fee_breakdown','receipt_data','synced','synced_at','created_at','last_updated','updated_at'],
+  transaction_items: ['id','transaction_id','product_id','item_name','item_type','quantity','price','tax_rate_id','tax_amount','total','notes','created_at','last_updated','updated_at'],
+  tax_rates: ['id','location_id','name','rate','type','is_default','is_active','created_at','last_updated','updated_at'],
+  employees: ['id','location_id','user_id','name','email','phone','role','permissions','is_active','hire_date','salary','created_at','last_updated','updated_at'],
+  // Restaurant
+  menu_items: ['id','location_id','category_id','name','description','price','image_url','preparation_time','is_available','is_vegetarian','is_spicy','allergens','created_at','last_updated','updated_at'],
+  modifiers: ['id','location_id','category_id','menu_item_id','name','type','price','is_required','is_active','created_at','last_updated','updated_at'],
+  // Pharmacy
+  service_categories: ['id','location_id','name','description','is_active','created_at','last_updated','updated_at'],
+  patients: ['id','location_id','customer_id','name','phone','email','date_of_birth','gender','address','medical_history','allergies','insurance_provider','insurance_number','created_at','last_updated','updated_at'],
+  prescriptions: ['id','location_id','patient_id','doctor_name','doctor_license','prescription_date','notes','items','status','created_at','last_updated','updated_at'],
+  // Services
+  services: ['id','location_id','service_category_id','name','description','price','duration','is_active','created_at','last_updated','updated_at'],
+  appointments: ['id','location_id','customer_id','service_id','employee_id','title','description','appointment_date','start_time','end_time','duration','status','payment_status','total_amount','notes','google_calendar_event_id','created_at','last_updated','updated_at'],
+  // Refilling
+  containers: ['id','location_id','customer_id','container_number','container_type','capacity','status','last_refill_date','next_refill_date','created_at','last_updated','updated_at'],
+  refill_history: ['id','location_id','container_id','customer_id','refill_date','quantity','amount','payment_status','delivery_address','delivery_date','notes','created_at','last_updated','updated_at'],
+  // Open items
+  item_types: ['id','location_id','name','description','is_active','created_at','last_updated','updated_at'],
+  open_items: ['id','location_id','item_type_id','name','description','quantity','unit','price','tax_rate_id','status','created_at','last_updated','updated_at'],
+  // Multi-business
+  businesses: ['id','user_id','name','business_type','registration_number','tax_id','address','phone','email','is_active','created_at','last_updated','updated_at'],
+  business_types: ['id','name','description','features','created_at','last_updated','updated_at'],
+  // Barcode
+  barcode_settings: ['id','location_id','prefix','format','include_price','include_name','settings','created_at','last_updated','updated_at'],
+  barcode_history: ['id','location_id','product_id','barcode','scanned_at','action','created_at'],
+  // Reports
+  gst_reports: ['id','location_id','report_period','period_start','period_end','total_sales','total_tax','cgst','sgst','igst','report_data','created_at','last_updated','updated_at'],
+  tax_reports: ['id','location_id','report_period','period_start','period_end','total_revenue','total_tax_collected','tax_breakdown','report_data','created_at','last_updated','updated_at'],
+  // Sync
+  sync_queue: ['id','user_id','table_name','record_id','action','data','status','error_message','retry_count','created_at','synced_at'],
+  // Legacy tables (keep for compatibility)
   orders: ['id','businesstype','customername','customerphone','customeremail','items','subtotal','tax','total','taxrate','paymentmethod','upivid','paymentstatus','timestamp','status','ordertype','tablenumber','address','created_at','createdat','updated_at'],
   medicines: ['id','name','brand','category','batchnumber','expirydate','manufacturingdate','quantity','unitprice','supplier','prescription','activeingredient','dosage','form','lowstockthreshold','created_at','createdat','updated_at'],
   invoices: ['id','invoicenumber','clientname','clientemail','clientaddress','items','subtotal','tax','total','status','issuedate','duedate','notes','createdat','updated_at'],
   expenses: ['id','description','amount','category','date','receipt','notes','createdat','updated_at'],
-  employees: ['id','name','email','phone','role','status','employeid','pin','performancescore','joindate','salary','created_at','createdat','updated_at'],
   attendance: ['id','employeeid','date','checkin','checkout','status','notes','created_at','createdat','updated_at'],
-  appointments: ['id','customername','customerphone','customeremail','servicename','serviceid','datetime','duration','status','notes','created_at','createdat','updated_at'],
-  services: ['id','name','description','price','duration','category','available','created_at','createdat','updated_at'],
-  locations: ['id','name','address','phone','email','manager','created_at','createdat','updated_at'],
+  settings: ['id','data','created_at','createdat','updated_at'],
   subscriptions: ['id','userid','plantype','startdate','enddate','status','created_at','createdat','updated_at'],
   payments: ['id','orderid','amount','paymentmethod','paymentstatus','transactionid','timestamp','created_at','createdat','updated_at']
 };

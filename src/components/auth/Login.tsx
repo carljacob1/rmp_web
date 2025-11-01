@@ -41,247 +41,71 @@ export function Login({ onLogin }: LoginProps) {
     
     setLoading(true);
     
-    const supabase = getSupabaseClient();
-    if (!supabase) {
-      setLoading(false);
-      toast({
-        title: "Error",
-        description: "Supabase is not configured. Please check your environment variables.",
-        variant: "destructive",
-      });
-      return;
-    }
-
     try {
-      // Step 1: Try Supabase authentication first
-      let supabaseLoginSuccess = false;
-      let authenticatedUser = null;
-      let userData = null;
-
-      try {
-        const isEmail = credentials.username.includes('@');
-        let authResponse;
-        
-        if (isEmail) {
-          // Sign in with email
-          authResponse = await supabase.auth.signInWithPassword({
-            email: credentials.username,
-            password: credentials.password,
-          });
-        } else {
-          // For phone, try to find user by phone in users table first
-          const { data: users } = await supabase
-            .from('users')
-            .select('*')
-            .eq('mobile', credentials.username)
-            .limit(1);
-          
-          if (users && users.length > 0 && users[0].email) {
-            // Found user by phone, authenticate with their email
-            authResponse = await supabase.auth.signInWithPassword({
-              email: users[0].email,
-              password: credentials.password,
-            });
-          } else {
-            // Try as email (might be typed as phone but is actually email)
-            authResponse = await supabase.auth.signInWithPassword({
-              email: credentials.username,
-              password: credentials.password,
-            });
-          }
-        }
-
-        if (authResponse?.data?.user && !authResponse?.error) {
-          // Supabase Auth successful
-          authenticatedUser = authResponse.data.user;
-          supabaseLoginSuccess = true;
-          
-          // Fetch user profile from users table
-          const { data: userProfile } = await supabase
-            .from('users')
-            .select('*')
-            .eq('email', authenticatedUser.email || credentials.username)
-            .or(`mobile.eq.${credentials.username}`)
-            .maybeSingle();
-
-          userData = {
-            id: authenticatedUser.id,
-            email: authenticatedUser.email || credentials.username,
-            ownerName: userProfile?.ownername || authenticatedUser.email,
-            ...(userProfile || {}),
-          };
-        }
-      } catch (supabaseError: any) {
-        // Supabase login failed - will fall back to IndexedDB
-        console.log('[Login] Supabase Auth failed:', supabaseError?.message || supabaseError);
-      }
-
-      // Step 2: If Supabase failed, try api.registrations table first, then IndexedDB
-      if (!supabaseLoginSuccess) {
-        // Try api.registrations table (has passwords)
-        console.log('[Login] Checking api.registrations table...');
-        try {
-          const { data: registration, error: regError } = await supabase
-            .from('registrations')
-            .select('*')
-            .or(`email.eq.${credentials.username},mobile.eq.${credentials.username}`)
-            .eq('password', credentials.password)
-            .maybeSingle();
-          
-          if (regError) {
-            console.log('[Login] Error checking registrations:', regError);
-          }
-          
-          if (registration) {
-            console.log('[Login] ✅ Found user in api.registrations');
-            // Fetch profile from api.users
-            const { data: userProfile } = await supabase
-              .from('users')
-              .select('*')
-              .or(`email.eq.${registration.email || credentials.username},mobile.eq.${credentials.username}`)
-              .maybeSingle();
-            
-            userData = {
-              id: userProfile?.id || registration.id,
-              email: registration.email || userProfile?.email || credentials.username,
-              mobile: registration.mobile || userProfile?.mobile,
-              ownerName: registration.ownername || userProfile?.ownername,
-              businessType: registration.businesstype || userProfile?.businessid,
-              ...(userProfile || {}),
-              ...registration,
-            };
-            
-            await setCurrentUser(userData);
-            // Also save to localStorage for immediate access
-            localStorage.setItem('currentUser', JSON.stringify(userData));
-            
-            const userBusinessType = userData.businessType || userData.businessid || 'retail';
-            
-            if (onLogin) {
-              onLogin({
-                ...credentials,
-                businessType: userBusinessType as BusinessType
-              });
-            } else {
-              navigate("/app", { 
-                state: { 
-                  user: userData,
-                  businessType: userBusinessType 
-                } 
-              });
-            }
-            
-            toast({
-              title: "Success",
-              description: `Logged in successfully! Welcome back, ${userData.ownerName || userData.email}`,
-            });
-            return;
-          } else {
-            console.log('[Login] User not found in api.registrations');
-          }
-        } catch (regCheckError) {
-          console.log('[Login] Error checking api.registrations:', regCheckError);
-        }
-        
-        // Step 3: Finally try IndexedDB
-        console.log('[Login] Trying IndexedDB authentication...');
-        const users = await dbGetAll<any>('users');
-        
-        // Debug: Log what we're looking for and what we have
-        console.log('[Login] Searching for username:', credentials.username);
-        console.log('[Login] Total users in IndexedDB:', users.length);
-        if (users.length > 0) {
-          console.log('[Login] Sample user from IndexedDB:', {
-            email: users[0].email,
-            mobile: users[0].mobile,
-            hasPassword: !!users[0].password,
-            allKeys: Object.keys(users[0])
-          });
-        }
-        
-        // Case-insensitive and field-variation tolerant search
-        const foundUser = users.find((u: any) => {
-          // Normalize field names (handle both camelCase and lowercase)
-          const userEmail = (u.email || u.Email || '').toLowerCase().trim();
-          const userMobile = (u.mobile || u.Mobile || '').trim();
-          const searchValue = credentials.username.toLowerCase().trim();
-          
-          // Check email match (case-insensitive)
-          const emailMatch = userEmail === searchValue;
-          
-          // Check mobile match (exact, no case needed for numbers)
-          const mobileMatch = userMobile === credentials.username.trim();
-          
-          // Get password field (handle variations)
-          const userPassword = u.password || u.Password || '';
-          
-          const usernameMatches = emailMatch || mobileMatch;
-          const passwordMatches = userPassword === credentials.password;
-          
-          console.log('[Login] Checking user:', {
-            email: userEmail,
-            mobile: userMobile,
-            emailMatch,
-            mobileMatch,
-            passwordMatch: passwordMatches,
-            usernameMatches
-          });
-          
-          return usernameMatches && passwordMatches;
+      // Step 1: Try IndexedDB first (like mobile app) - fastest and most reliable
+      console.log('[Login] Trying IndexedDB authentication first...');
+      const users = await dbGetAll<any>('users');
+      
+      // Debug: Log what we're looking for and what we have
+      console.log('[Login] Searching for username:', credentials.username);
+      console.log('[Login] Total users in IndexedDB:', users.length);
+      if (users.length > 0) {
+        console.log('[Login] Sample user from IndexedDB:', {
+          email: users[0].email,
+          mobile: users[0].mobile,
+          hasPassword: !!users[0].password,
+          allKeys: Object.keys(users[0])
         });
+      }
+      
+      // Case-insensitive and field-variation tolerant search
+      const foundUser = users.find((u: any) => {
+        // Normalize field names (handle both camelCase and lowercase)
+        const userEmail = (u.email || u.Email || '').toLowerCase().trim();
+        const userMobile = (u.mobile || u.Mobile || '').trim();
+        const searchValue = credentials.username.toLowerCase().trim();
+        
+        // Check email match (case-insensitive)
+        const emailMatch = userEmail === searchValue;
+        
+        // Check mobile match (exact, no case needed for numbers)
+        const mobileMatch = userMobile === credentials.username.trim();
+        
+        // Get password field (handle variations)
+        const userPassword = u.password || u.Password || '';
+        
+        const usernameMatches = emailMatch || mobileMatch;
+        const passwordMatches = userPassword === credentials.password;
+        
+        console.log('[Login] Checking user:', {
+          email: userEmail,
+          mobile: userMobile,
+          emailMatch,
+          mobileMatch,
+          passwordMatch: passwordMatches,
+          usernameMatches
+        });
+        
+        return usernameMatches && passwordMatches;
+      });
 
-        if (foundUser) {
-          console.log('[Login] ✅ Found user in IndexedDB:', foundUser);
-          // IndexedDB login successful
-          // Normalize field names for consistency
-          userData = {
-            ...foundUser,
-            ownerName: foundUser.ownerName || foundUser.ownername || foundUser.OwnerName,
-            email: foundUser.email || foundUser.Email,
-            mobile: foundUser.mobile || foundUser.Mobile,
-          };
-          
-          await setCurrentUser(userData);
-          // Also save to localStorage for immediate access
-          localStorage.setItem('currentUser', JSON.stringify(userData));
-          
-          const userBusinessType = foundUser.businessType || foundUser.businesstype || foundUser.businessid || 'retail';
-          
-          if (onLogin) {
-            onLogin({
-              ...credentials,
-              businessType: userBusinessType as BusinessType
-            });
-          } else {
-            navigate("/app", { 
-              state: { 
-                user: userData,
-                businessType: userBusinessType 
-              } 
-            });
-          }
-          
-          toast({
-            title: "Success",
-            description: `Logged in successfully! Welcome back, ${userData.ownerName || userData.email || 'User'}`,
-          });
-          return;
-        } else {
-          console.log('[Login] ❌ User not found in IndexedDB with matching credentials');
-          console.log('[Login] Available users:', users.map((u: any) => ({
-            email: u.email || u.Email,
-            mobile: u.mobile || u.Mobile,
-            hasPassword: !!u.password
-          })));
-        }
-      } else {
-        // Supabase login was successful
+      if (foundUser) {
+        console.log('[Login] ✅ Found user in IndexedDB:', foundUser);
+        // IndexedDB login successful
+        // Normalize field names for consistency
+        const userData = {
+          ...foundUser,
+          ownerName: foundUser.ownerName || foundUser.ownername || foundUser.OwnerName,
+          email: foundUser.email || foundUser.Email,
+          mobile: foundUser.mobile || foundUser.Mobile,
+        };
+        
         await setCurrentUser(userData);
         // Also save to localStorage for immediate access
         localStorage.setItem('currentUser', JSON.stringify(userData));
-
-        const userBusinessType = userData?.businesstype || userData?.businessType || userData?.businessid || 'retail';
-
+        
+        const userBusinessType = foundUser.businessType || foundUser.businesstype || foundUser.businessid || 'retail';
+        
         if (onLogin) {
           onLogin({
             ...credentials,
@@ -298,13 +122,90 @@ export function Login({ onLogin }: LoginProps) {
         
         toast({
           title: "Success",
-          description: `Logged in successfully! Welcome back, ${userData?.ownerName || authenticatedUser?.email || 'User'}`,
+          description: `Logged in successfully! Welcome back, ${userData.ownerName || userData.email || 'User'}`,
         });
+        setLoading(false);
         return;
+      } else {
+        console.log('[Login] ❌ User not found in IndexedDB with matching credentials');
+        console.log('[Login] Available users:', users.map((u: any) => ({
+          email: u.email || u.Email,
+          mobile: u.mobile || u.Mobile,
+          hasPassword: !!u.password
+        })));
       }
 
-      // If both Supabase and IndexedDB failed, show detailed error
-      console.error('[Login] ❌ Both Supabase and IndexedDB authentication failed');
+      // Step 2: Try api.registrations table (has passwords)
+      const supabase = getSupabaseClient();
+      if (supabase) {
+          console.log('[Login] Checking api.registrations table...');
+          try {
+            const { data: registration, error: regError } = await supabase
+              .from('registrations')
+              .select('*')
+              .or(`email.eq.${credentials.username},mobile.eq.${credentials.username}`)
+              .eq('password', credentials.password)
+              .maybeSingle();
+            
+            if (regError) {
+              console.log('[Login] Error checking registrations:', regError);
+            }
+            
+            if (registration) {
+              console.log('[Login] ✅ Found user in api.registrations');
+              // Fetch profile from api.users
+              const { data: userProfile } = await supabase
+                .from('users')
+                .select('*')
+                .or(`email.eq.${registration.email || credentials.username},mobile.eq.${credentials.username}`)
+                .maybeSingle();
+              
+              const userData = {
+                id: userProfile?.id || registration.id,
+                email: registration.email || userProfile?.email || credentials.username,
+                mobile: registration.mobile || userProfile?.mobile,
+                ownerName: registration.ownername || userProfile?.ownername,
+                businessType: registration.businesstype || userProfile?.businessid,
+                ...(userProfile || {}),
+                ...registration,
+              };
+              
+              await setCurrentUser(userData);
+              // Also save to localStorage for immediate access
+              localStorage.setItem('currentUser', JSON.stringify(userData));
+              
+              const userBusinessType = userData.businessType || userData.businessid || 'retail';
+              
+              if (onLogin) {
+                onLogin({
+                  ...credentials,
+                  businessType: userBusinessType as BusinessType
+                });
+              } else {
+                navigate("/app", { 
+                  state: { 
+                    user: userData,
+                    businessType: userBusinessType 
+                  } 
+                });
+              }
+              
+              toast({
+                title: "Success",
+                description: `Logged in successfully! Welcome back, ${userData.ownerName || userData.email}`,
+              });
+              setLoading(false);
+              return;
+            } else {
+              console.log('[Login] User not found in api.registrations');
+            }
+          } catch (regCheckError) {
+            console.log('[Login] Error checking api.registrations:', regCheckError);
+          }
+      }
+
+      // If all authentication methods failed, show detailed error
+      console.error('[Login] ❌ All authentication methods failed');
       console.error('[Login] Username searched:', credentials.username);
       console.error('[Login] Password provided:', credentials.password ? '***' : 'empty');
       
